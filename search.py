@@ -4,7 +4,9 @@ Convo Memory — Search Interface
 Search past conversations using keywords or semantic similarity.
 """
 
+import gc
 import sqlite3
+import time as _time
 import threading
 import numpy as np
 from pathlib import Path
@@ -23,14 +25,45 @@ DB_PATH = Path(__file__).parent / "convo_memory.db"
 EMBEDDING_MODEL = "text-embedding-3-small"
 
 # Cached embedding matrix for vectorized semantic search
+# IMPORTANT: metadata stores only IDs (not content) to avoid multi-GB memory.
+# Content is looked up from DB only for top-K results after scoring.
+_CACHE_TTL_SECONDS = 300  # 5 minutes — clear cache after inactivity
 _embedding_cache = {
     "matrix": None,       # np.ndarray of shape (N, dim)
-    "metadata": None,     # list of (message_id, session_id, agent_id, channel, role, content, timestamp)
+    "msg_ids": None,      # np.ndarray of message IDs (for content lookup after scoring)
+    "metadata": None,     # list of (message_id, session_id, agent_id, channel, role, timestamp) — NO content
     "norms": None,        # precomputed row norms
     "count": 0,           # row count when cache was built
     "filters_hash": None, # hash of filter params to invalidate on filter change
+    "last_access": 0,     # monotonic timestamp of last use
 }
 _embedding_lock = threading.Lock()
+
+
+def _clear_embedding_cache():
+    """Release the embedding cache to free memory."""
+    global _embedding_cache
+    _embedding_cache = {
+        "matrix": None, "msg_ids": None, "metadata": None, "norms": None,
+        "count": 0, "filters_hash": None, "last_access": 0,
+    }
+    gc.collect()
+
+
+def _cache_janitor():
+    """Background thread that clears the embedding cache after TTL expires."""
+    while True:
+        _time.sleep(60)
+        with _embedding_lock:
+            if (_embedding_cache["matrix"] is not None
+                    and _embedding_cache["last_access"] > 0
+                    and (_time.monotonic() - _embedding_cache["last_access"]) > _CACHE_TTL_SECONDS):
+                _clear_embedding_cache()
+
+
+# Start the janitor thread (daemon — dies with the process)
+_janitor = threading.Thread(target=_cache_janitor, daemon=True, name="embedding-cache-janitor")
+_janitor.start()
 
 
 @dataclass
@@ -129,21 +162,36 @@ def _build_embedding_cache(conn: sqlite3.Connection, agent=None, channel=None,
     """Load embeddings into a numpy matrix for vectorized search.
 
     Caches the matrix so subsequent queries don't re-read from SQLite.
+    Content is NOT stored — only message IDs and light metadata.
+    Content is looked up from DB only for the top-K results after scoring.
+
+    Memory budget: ~2.3GB for 376K embeddings (matrix + norms).
+    Old version also stored content strings (~150MB) and had 3-copy peak (~4.8GB).
+    New version: ~2.3GB steady, ~2.3GB peak (stream directly into pre-allocated array).
     """
     global _embedding_cache
 
     # Build filter hash to detect when we need to rebuild
     filter_key = f"{agent}|{channel}|{days}|{date_from}|{date_to}"
 
-    # Check if current row count matches cache
+    # Check if current row count matches cache + TTL hasn't expired
     row_count = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
     if (_embedding_cache["matrix"] is not None
             and _embedding_cache["count"] == row_count
             and _embedding_cache["filters_hash"] == filter_key):
+        _embedding_cache["last_access"] = _time.monotonic()
         return  # Cache is still valid
 
-    sql = """
-        SELECT m.id, m.session_id, s.agent_id, s.channel, m.role, m.content, m.timestamp, e.embedding
+    # Count rows for this filter set to pre-allocate array
+    count_sql = """
+        SELECT COUNT(*)
+        FROM embeddings e
+        JOIN messages m ON e.message_id = m.id
+        JOIN sessions s ON m.session_id = s.id
+        WHERE 1=1
+    """
+    data_sql = """
+        SELECT m.id, m.session_id, s.agent_id, s.channel, m.role, m.timestamp, e.embedding
         FROM embeddings e
         JOIN messages m ON e.message_id = m.id
         JOIN sessions s ON m.session_id = s.id
@@ -151,44 +199,72 @@ def _build_embedding_cache(conn: sqlite3.Connection, agent=None, channel=None,
     """
     params = []
     if agent:
-        sql += " AND s.agent_id = ?"
+        count_sql += " AND s.agent_id = ?"
+        data_sql += " AND s.agent_id = ?"
         params.append(agent)
     if channel:
-        sql += " AND s.channel = ?"
+        count_sql += " AND s.channel = ?"
+        data_sql += " AND s.channel = ?"
         params.append(channel)
     if days:
         cutoff = datetime.now() - timedelta(days=days)
-        sql += " AND m.timestamp >= ?"
+        count_sql += " AND m.timestamp >= ?"
+        data_sql += " AND m.timestamp >= ?"
         params.append(cutoff)
     if date_from:
-        sql += " AND m.timestamp >= ?"
+        count_sql += " AND m.timestamp >= ?"
+        data_sql += " AND m.timestamp >= ?"
         params.append(date_from.isoformat())
     if date_to:
-        sql += " AND m.timestamp <= ?"
+        count_sql += " AND m.timestamp <= ?"
+        data_sql += " AND m.timestamp <= ?"
         params.append(date_to.isoformat())
 
-    rows = conn.execute(sql, params).fetchall()
-    if not rows:
-        _embedding_cache = {"matrix": np.empty((0, 0)), "metadata": [], "norms": np.empty(0),
-                            "count": row_count, "filters_hash": filter_key}
+    n_rows = conn.execute(count_sql, params).fetchone()[0]
+    if n_rows == 0:
+        _embedding_cache = {
+            "matrix": np.empty((0, 0)), "msg_ids": np.empty(0, dtype=np.int64),
+            "metadata": [], "norms": np.empty(0),
+            "count": row_count, "filters_hash": filter_key,
+            "last_access": _time.monotonic(),
+        }
         return
 
-    metadata = []
-    embeddings_list = []
-    for row in rows:
-        metadata.append(row[:7])  # (id, session_id, agent_id, channel, role, content, timestamp)
-        embeddings_list.append(np.frombuffer(row[7], dtype=np.float32))
+    # Pre-allocate numpy array — avoids the 3-copy peak from fetchall + list + vstack
+    EMB_DIM = 1536  # text-embedding-3-small
+    matrix = np.empty((n_rows, EMB_DIM), dtype=np.float32)
+    msg_ids = np.empty(n_rows, dtype=np.int64)
+    metadata = []  # (message_id, session_id, agent_id, channel, role, timestamp) — NO content
 
-    matrix = np.vstack(embeddings_list)  # shape: (N, dim)
-    norms = np.linalg.norm(matrix, axis=1)  # precompute for cosine similarity
+    cursor = conn.execute(data_sql, params)
+    i = 0
+    for row in cursor:
+        # row: (m.id, m.session_id, s.agent_id, s.channel, m.role, m.timestamp, e.embedding)
+        msg_ids[i] = row[0]
+        metadata.append(row[:6])  # everything except embedding blob
+        matrix[i] = np.frombuffer(row[6], dtype=np.float32)
+        i += 1
 
+    # Trim if cursor returned fewer rows than COUNT (shouldn't happen, but be safe)
+    if i < n_rows:
+        matrix = matrix[:i]
+        msg_ids = msg_ids[:i]
+
+    norms = np.linalg.norm(matrix, axis=1)
+
+    # Release old cache before assigning new one
+    old_matrix = _embedding_cache.get("matrix")
     _embedding_cache = {
         "matrix": matrix,
+        "msg_ids": msg_ids,
         "metadata": metadata,
         "norms": norms,
         "count": row_count,
         "filters_hash": filter_key,
+        "last_access": _time.monotonic(),
     }
+    del old_matrix
+    gc.collect()
 
 
 def semantic_search(
@@ -202,7 +278,12 @@ def semantic_search(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None
 ) -> List[SearchResult]:
-    """Search using vectorized embedding similarity (numpy matrix multiply)."""
+    """Search using vectorized embedding similarity (numpy matrix multiply).
+
+    Content is NOT stored in the embedding cache to save ~150MB+ of memory.
+    Instead, we score all embeddings first, then look up content only for the
+    top-K matches from the database.
+    """
 
     if not OPENAI_AVAILABLE or openai_client is None:
         print("⚠️  Semantic search requires OpenAI. Falling back to keyword search.")
@@ -214,6 +295,12 @@ def semantic_search(
     q_norm = np.linalg.norm(q_emb)
 
     with _embedding_lock:
+        # Check TTL — clear stale cache to free memory
+        if (_embedding_cache["matrix"] is not None
+                and _embedding_cache["last_access"] > 0
+                and (_time.monotonic() - _embedding_cache["last_access"]) > _CACHE_TTL_SECONDS):
+            _clear_embedding_cache()
+
         # Build/refresh the embedding matrix cache
         _build_embedding_cache(conn, agent, channel, days, date_from, date_to)
 
@@ -224,6 +311,7 @@ def semantic_search(
         matrix = _embedding_cache["matrix"]
         norms = _embedding_cache["norms"]
         metadata = _embedding_cache["metadata"]
+        msg_ids = _embedding_cache["msg_ids"]
 
     similarities = matrix @ q_emb / (norms * q_norm + 1e-10)
 
@@ -232,17 +320,38 @@ def semantic_search(
     top_indices = np.argpartition(similarities, -top_k)[-top_k:]
     top_indices = top_indices[np.argsort(similarities[top_indices])[::-1]]
 
-    # Build results with dedup
+    # Collect candidate message IDs and their metadata
     MIN_SIMILARITY = 0.45
-    seen = set()
-    results = []
+    candidates = []
     for idx in top_indices:
         sim = float(similarities[idx])
         if sim < MIN_SIMILARITY:
             break
         meta = metadata[idx]
-        # meta: (id, session_id, agent_id, channel, role, content, timestamp)
-        fingerprint = f"{meta[4]}:{meta[5][:200]}"
+        # meta: (message_id, session_id, agent_id, channel, role, timestamp)
+        candidates.append((int(msg_ids[idx]), meta, sim))
+        if len(candidates) >= limit * 3:
+            break
+
+    if not candidates:
+        return []
+
+    # Batch-fetch content for top candidates from DB (not cached in memory)
+    candidate_ids = [c[0] for c in candidates]
+    placeholders = ",".join(["?"] * len(candidate_ids))
+    content_rows = conn.execute(
+        f"SELECT id, content FROM messages WHERE id IN ({placeholders})",
+        candidate_ids
+    ).fetchall()
+    content_map = {row[0]: row[1] for row in content_rows}
+
+    # Build results with dedup
+    seen = set()
+    results = []
+    for msg_id, meta, sim in candidates:
+        content = content_map.get(msg_id, "")
+        role = meta[4]
+        fingerprint = f"{role}:{content[:200]}"
         if fingerprint in seen:
             continue
         seen.add(fingerprint)
@@ -250,9 +359,9 @@ def semantic_search(
             session_id=meta[1],
             agent_id=meta[2],
             channel=meta[3],
-            role=meta[4],
-            content=meta[5],
-            timestamp=datetime.fromisoformat(meta[6]) if meta[6] else None,
+            role=role,
+            content=content,
+            timestamp=datetime.fromisoformat(meta[5]) if meta[5] else None,
             score=sim,
         ))
         if len(results) >= limit:
