@@ -27,7 +27,7 @@ EMBEDDING_MODEL = "text-embedding-3-small"
 # Cached embedding matrix for vectorized semantic search
 # IMPORTANT: metadata stores only IDs (not content) to avoid multi-GB memory.
 # Content is looked up from DB only for top-K results after scoring.
-_CACHE_TTL_SECONDS = 300  # 5 minutes — clear cache after inactivity
+_CACHE_TTL_SECONDS = 1800  # 30 minutes — clear cache after inactivity
 _embedding_cache = {
     "matrix": None,       # np.ndarray of shape (N, dim)
     "msg_ids": None,      # np.ndarray of message IDs (for content lookup after scoring)
@@ -48,6 +48,28 @@ def _clear_embedding_cache():
         "count": 0, "filters_hash": None, "last_access": 0,
     }
     gc.collect()
+
+
+def cache_status() -> dict:
+    """Return observability info about the embedding cache."""
+    with _embedding_lock:
+        matrix = _embedding_cache["matrix"]
+        if matrix is None:
+            return {"loaded": False, "rows": 0, "memory_mb": 0, "ttl_seconds": _CACHE_TTL_SECONDS,
+                    "idle_seconds": None, "filters_hash": None}
+        rows = matrix.shape[0]
+        mem_mb = round((matrix.nbytes + _embedding_cache["norms"].nbytes
+                        + _embedding_cache["msg_ids"].nbytes) / 1024 / 1024, 1)
+        last = _embedding_cache["last_access"]
+        idle = round(_time.monotonic() - last, 1) if last > 0 else None
+        return {
+            "loaded": True,
+            "rows": rows,
+            "memory_mb": mem_mb,
+            "ttl_seconds": _CACHE_TTL_SECONDS,
+            "idle_seconds": idle,
+            "filters_hash": _embedding_cache["filters_hash"],
+        }
 
 
 def _cache_janitor():
@@ -239,6 +261,8 @@ def _build_embedding_cache(conn: sqlite3.Connection, agent=None, channel=None,
     cursor = conn.execute(data_sql, params)
     i = 0
     for row in cursor:
+        if i >= n_rows:
+            break  # safety: cursor returned more rows than COUNT predicted
         # row: (m.id, m.session_id, s.agent_id, s.channel, m.role, m.timestamp, e.embedding)
         msg_ids[i] = row[0]
         metadata.append(row[:6])  # everything except embedding blob

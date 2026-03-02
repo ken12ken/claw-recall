@@ -11,8 +11,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from recall import unified_search
-from search import DB_PATH
+from search import DB_PATH, cache_status
 import re
+
+
+def _get_db() -> sqlite3.Connection:
+    """Open a WAL-mode connection to the convo_memory database."""
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
 
 # Shared SQL filter for valid agent sessions (excludes hex IDs, internal, noise)
 VALID_AGENT_FILTER = """
@@ -70,12 +77,29 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/status')
+def status_endpoint():
+    """Observability endpoint: embedding cache state + DB stats."""
+    info = cache_status()
+    try:
+        conn = _get_db()
+        try:
+            info["db_messages"] = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            info["db_embeddings"] = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+            info["db_sessions"] = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        finally:
+            conn.close()
+    except Exception as e:
+        info["db_error"] = str(e)
+    return jsonify(info)
+
+
 @app.route('/agents')
 def agents_endpoint():
     """Return list of agents with session counts (for dynamic pills/dropdown)."""
     days = _safe_int(request.args.get('days', '14'), 14, lo=0)
     try:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _get_db()
         try:
             sql = f"""
                 SELECT CASE WHEN s.agent_id = 'Kit' THEN 'main' ELSE s.agent_id END as norm_agent,
@@ -140,7 +164,7 @@ def _enrich_convo_with_session(convo: dict):
     if not content_prefix:
         return
     try:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _get_db()
         try:
             escaped = _escape_like(content_prefix)
             cursor = conn.execute("""
@@ -175,7 +199,7 @@ def context_endpoint():
         return jsonify({"error": "message_id required"}), 400
 
     try:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _get_db()
         try:
             cursor = conn.execute(
                 "SELECT message_index FROM messages WHERE id = ? AND session_id = ?",
@@ -242,7 +266,7 @@ def activity_endpoint():
     limit = _safe_int(request.args.get('limit', '30'), 30, lo=0, hi=100)
 
     try:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _get_db()
         try:
             conn.row_factory = sqlite3.Row
 
@@ -313,7 +337,7 @@ def session_endpoint():
     window = _safe_int(request.args.get('window', '30'), 30, lo=1, hi=60)
 
     try:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _get_db()
         try:
             sess = conn.execute(
                 "SELECT id, agent_id, started_at, message_count FROM sessions WHERE id = ?",
