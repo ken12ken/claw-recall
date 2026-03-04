@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Add current dir to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from search import search_conversations, SearchResult, deduplicate_results, OPENAI_AVAILABLE
+from search import search_conversations, SearchResult, deduplicate_results, OPENAI_AVAILABLE, search_thoughts, ThoughtResult
 from search_files import search_files, FileMatch
 
 
@@ -159,9 +159,35 @@ def unified_search(
     results = {
         "conversations": [],
         "files": [],
+        "thoughts": [],
         "summary": ""
     }
-    
+
+    def search_captured_thoughts():
+        try:
+            use_semantic = semantic if semantic is not None else should_use_semantic(query)
+            thought_results = search_thoughts(
+                query=query,
+                agent=agent,
+                semantic=use_semantic,
+                days=int(days) if days else None,
+                limit=limit,
+            )
+            return [
+                {
+                    "id": r.thought_id,
+                    "content": r.content[:500],
+                    "source": r.source,
+                    "agent": r.agent,
+                    "metadata": r.metadata,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "score": round(r.score, 3),
+                }
+                for r in thought_results
+            ]
+        except Exception as e:
+            return [{"error": str(e)}]
+
     def search_convos():
         try:
             # Auto-detect semantic vs keyword if not explicitly set
@@ -214,30 +240,35 @@ def unified_search(
             return [{"error": str(e)}]
     
     # Run searches in parallel
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {}
-        
+
         if not files_only:
             futures['convos'] = executor.submit(search_convos)
+            futures['thoughts'] = executor.submit(search_captured_thoughts)
         if not convos_only:
             futures['files'] = executor.submit(search_docs)
-        
+
         for key, future in futures.items():
             try:
+                result_data = future.result(timeout=30)
                 if key == 'convos':
-                    results["conversations"] = future.result(timeout=30)
+                    results["conversations"] = result_data
+                elif key == 'thoughts':
+                    results["thoughts"] = result_data
                 else:
-                    results["files"] = future.result(timeout=30)
+                    results["files"] = result_data
             except Exception as e:
-                if key == 'convos':
-                    results["conversations"] = [{"error": str(e)}]
-                else:
-                    results["files"] = [{"error": str(e)}]
-    
+                results[key if key != 'convos' else 'conversations'] = [{"error": str(e)}]
+
     # Summary
     conv_count = len([r for r in results["conversations"] if "error" not in r])
     file_count = len([r for r in results["files"] if "error" not in r])
-    results["summary"] = f"Found {conv_count} conversation matches and {file_count} file matches"
+    thought_count = len([r for r in results["thoughts"] if "error" not in r])
+    parts = [f"{conv_count} conversation matches", f"{file_count} file matches"]
+    if thought_count > 0:
+        parts.append(f"{thought_count} thought matches")
+    results["summary"] = "Found " + " and ".join(parts)
     
     return results
 
@@ -261,22 +292,59 @@ def format_unified_results(results: dict, verbose: bool = False) -> str:
             output.append(f"\n#{i} | {r['agent']} | {r['channel']} | {ts}")
             output.append(f"   [{r['role']}] {content}")
     
+    # Thoughts
+    if results.get("thoughts"):
+        output.append("\n" + "="*60)
+        output.append("💭 THOUGHTS")
+        output.append("="*60)
+
+        for i, r in enumerate(results["thoughts"][:5], 1):
+            if "error" in r:
+                output.append(f"  Error: {r['error']}")
+                continue
+            ts = r.get('created_at', 'unknown')[:16] if r.get('created_at') else 'unknown'
+            content = r['content'][:150] + "..." if len(r.get('content', '')) > 150 else r.get('content', '')
+            src = r.get('source', '?')
+            agent = r.get('agent', '?')
+            output.append(f"\n#{i} | {agent} via {src} | {ts}")
+            output.append(f"   {content}")
+
     # Files
     if results["files"]:
         output.append("\n" + "="*60)
         output.append("📁 FILES")
         output.append("="*60)
-        
+
         for i, r in enumerate(results["files"][:5], 1):
             if "error" in r:
                 output.append(f"  Error: {r['error']}")
                 continue
             output.append(f"\n#{i} | {r['agent']} | {r['path']}:{r['line_num']}")
             output.append(f"   → {r['line'][:150]}")
-    
+
     output.append(f"\n📊 {results['summary']}")
     
     return '\n'.join(output)
+
+
+def _run_capture(args):
+    """Handle the 'capture' subcommand."""
+    from capture import capture_thought
+    content = ' '.join(args.text)
+    result = capture_thought(
+        content=content,
+        source=args.source,
+        agent=args.agent,
+    )
+    if "error" in result:
+        print(f"❌ {result['error']}")
+        raise SystemExit(1)
+    print(f"✅ Captured thought #{result['id']}")
+    if result.get('embedded'):
+        print(f"   Embedded: yes")
+    print(f"   Source: {result['source']}")
+    if result.get('agent'):
+        print(f"   Agent: {result['agent']}")
 
 
 def main():
@@ -294,18 +362,30 @@ Examples:
     claw-recall "grok" --since 60m                       # Last 60 minutes
     claw-recall "Kit" --since 2h --agent main            # Last 2 hours, specific agent
     claw-recall "floship" --from 2026-02-15 --to 2026-02-17   # Date range
-    claw-recall "order" --from yesterday --agent main          # Since yesterday
-    claw-recall "meeting" --from 2026-02-01 --to today         # Month to date
+    claw-recall capture "Rod prefers dark mode"           # Capture a thought
+    claw-recall capture "API rate limit is 100/min" --source manual --agent kit
         """
     )
+
+    # Check if first arg is "capture" subcommand
+    if len(sys.argv) > 1 and sys.argv[1] == 'capture':
+        cap_parser = argparse.ArgumentParser(prog='claw-recall capture',
+            description='Capture a thought into Claw Recall')
+        cap_parser.add_argument('text', nargs='+', help='Thought text to capture')
+        cap_parser.add_argument('--source', default='cli', help='Source (cli, manual, http, telegram)')
+        cap_parser.add_argument('--agent', '-a', help='Agent name')
+        cap_args = cap_parser.parse_args(sys.argv[2:])
+        _run_capture(cap_args)
+        return
+
     parser.add_argument('query', nargs='+', help='Search query')
     parser.add_argument('--agent', '-a', help='Filter by agent (main, cyrus, etc.)')
-    
+
     # Mutually exclusive: semantic vs keyword (default: auto-detect)
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument('--semantic', '-s', action='store_true', help='Force semantic search')
     mode_group.add_argument('--keyword', '-k', action='store_true', help='Force keyword search')
-    
+
     parser.add_argument('--files-only', '-f', action='store_true', help='Only search files')
     parser.add_argument('--convos-only', '-c', action='store_true', help='Only search conversations')
     parser.add_argument('--since', type=parse_since, help='Only search recent messages (e.g. 60m, 2h, 3d)')
@@ -314,7 +394,7 @@ Examples:
     parser.add_argument('--limit', '-n', type=int, default=10, help='Max results per category')
     parser.add_argument('--verbose', '-v', action='store_true', help='Show more context')
     parser.add_argument('--json', '-j', action='store_true', help='Output as JSON')
-    
+
     args = parser.parse_args()
     query = ' '.join(args.query)
     

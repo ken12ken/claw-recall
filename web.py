@@ -82,6 +82,11 @@ def status_endpoint():
             info["db_messages"] = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
             info["db_embeddings"] = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
             info["db_sessions"] = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+            try:
+                info["db_thoughts"] = conn.execute("SELECT COUNT(*) FROM thoughts").fetchone()[0]
+                info["db_thought_embeddings"] = conn.execute("SELECT COUNT(*) FROM thought_embeddings").fetchone()[0]
+            except Exception:
+                info["db_thoughts"] = 0
         finally:
             conn.close()
     except Exception as e:
@@ -113,6 +118,64 @@ def agents_endpoint():
             conn.close()
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/capture', methods=['POST'])
+def capture_endpoint():
+    """Capture a thought via HTTP API."""
+    try:
+        data = request.get_json(silent=True) or {}
+        content = data.get('content', '').strip()
+        if not content:
+            return jsonify({"error": "content is required"}), 400
+
+        from capture import capture_thought
+        result = capture_thought(
+            content=content,
+            source=data.get('source', 'http'),
+            agent=data.get('agent'),
+            metadata=data.get('metadata'),
+        )
+        if "error" in result:
+            return jsonify(result), 500
+        return jsonify(result), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/thoughts')
+def thoughts_endpoint():
+    """List or search captured thoughts."""
+    query = request.args.get('q', '')
+    limit = _safe_int(request.args.get('limit', '20'), 20, lo=1, hi=100)
+
+    if query:
+        from search import search_thoughts
+        semantic = request.args.get('semantic', 'false').lower() == 'true'
+        agent = request.args.get('agent', '') or None
+        results = search_thoughts(query=query, agent=agent, semantic=semantic, limit=limit)
+        return jsonify({
+            "thoughts": [
+                {
+                    "id": r.thought_id,
+                    "content": r.content[:500],
+                    "source": r.source,
+                    "agent": r.agent,
+                    "metadata": r.metadata,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "score": round(r.score, 3),
+                }
+                for r in results
+            ]
+        })
+
+    from capture import list_thoughts
+    thoughts = list_thoughts(
+        limit=limit,
+        source=request.args.get('source') or None,
+        agent=request.args.get('agent') or None,
+    )
+    return jsonify({"thoughts": thoughts})
 
 
 @app.route('/search')

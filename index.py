@@ -559,7 +559,9 @@ def main():
                         help='Database path')
     parser.add_argument('--incremental', action='store_true',
                         help='Only index new files (skip already indexed)')
-    
+    parser.add_argument('--quick', action='store_true',
+                        help='Quick mode: only index files modified in last 20 minutes')
+
     args = parser.parse_args()
     
     # Setup database
@@ -578,9 +580,39 @@ def main():
         else:
             print("⚠️  OpenAI not available, skipping embeddings")
     
+    # Quick mode: only index recently modified files across all dirs
+    if args.quick:
+        import time as _time
+        cutoff = _time.time() - (20 * 60)  # 20 minutes ago
+        results = {'indexed': 0, 'skipped': 0, 'errors': 0, 'total_messages': 0, 'total_embeddings': 0}
+        all_dirs = [args.source, DEFAULT_SESSIONS_PATH]
+        for scan_dir in all_dirs:
+            if not scan_dir.exists():
+                continue
+            for filepath in scan_dir.glob("**/*.jsonl"):
+                if '/subagents/' in str(filepath):
+                    continue
+                if filepath.stat().st_mtime < cutoff:
+                    continue
+                try:
+                    r = index_session_file(filepath, conn, args.embeddings, openai_client)
+                    if r['status'] == 'indexed':
+                        results['indexed'] += 1
+                        results['total_messages'] += r['messages']
+                        print(f"  ✅ {filepath.name}: {r['messages']} msgs")
+                    else:
+                        results['skipped'] += 1
+                except Exception as e:
+                    results['errors'] += 1
+                    print(f"  ❌ {filepath.name}: {e}")
+        conn.close()
+        if results['indexed'] > 0:
+            print(f"\n📊 Quick index: {results['indexed']} files indexed, {results['total_messages']} messages")
+        return
+
     print(f"\n📂 Indexing: {args.source}")
     results = index_directory(args.source, conn, args.embeddings, openai_client)
-    
+
     # Also index active sessions if requested
     if args.include_active:
         print(f"\n📂 Indexing active sessions: {DEFAULT_SESSIONS_PATH}")

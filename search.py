@@ -415,6 +415,163 @@ def deduplicate_results(results: List[SearchResult]) -> List[SearchResult]:
     return unique
 
 
+@dataclass
+class ThoughtResult:
+    """A search result from the thoughts table."""
+    thought_id: int
+    content: str
+    source: str
+    agent: Optional[str]
+    metadata: dict
+    created_at: Optional[datetime]
+    score: float
+
+
+def keyword_search_thoughts(
+    conn: sqlite3.Connection,
+    query: str,
+    agent: Optional[str] = None,
+    source: Optional[str] = None,
+    days: Optional[int] = None,
+    limit: int = 10,
+) -> List[ThoughtResult]:
+    """Search thoughts using FTS5 full-text search."""
+    import json as _json
+    words = [w.replace('"', '') for w in query.split() if w.replace('"', '')]
+    if not words:
+        return []
+    fts_query = " AND ".join(f'"{word}"' for word in words)
+
+    sql = """
+        SELECT t.id, t.content, t.source, t.agent, t.metadata, t.created_at,
+               bm25(thoughts_fts) as score
+        FROM thoughts_fts fts
+        JOIN thoughts t ON fts.rowid = t.id
+        WHERE thoughts_fts MATCH ?
+    """
+    params = [fts_query]
+    if agent:
+        sql += " AND t.agent = ?"
+        params.append(agent)
+    if source:
+        sql += " AND t.source = ?"
+        params.append(source)
+    if days:
+        cutoff = datetime.now() - timedelta(days=days)
+        sql += " AND t.created_at >= ?"
+        params.append(cutoff.isoformat())
+    sql += " ORDER BY bm25(thoughts_fts) ASC LIMIT ?"
+    params.append(limit)
+
+    results = []
+    for row in conn.execute(sql, params).fetchall():
+        try:
+            meta = _json.loads(row[4]) if row[4] else {}
+        except Exception:
+            meta = {}
+        results.append(ThoughtResult(
+            thought_id=row[0], content=row[1], source=row[2], agent=row[3],
+            metadata=meta,
+            created_at=datetime.fromisoformat(row[5]) if row[5] else None,
+            score=row[6],
+        ))
+    return results
+
+
+def semantic_search_thoughts(
+    conn: sqlite3.Connection,
+    query: str,
+    agent: Optional[str] = None,
+    source: Optional[str] = None,
+    days: Optional[int] = None,
+    limit: int = 10,
+    openai_client: Optional['OpenAI'] = None,
+) -> List[ThoughtResult]:
+    """Search thoughts using embedding similarity. Small dataset — no cache needed."""
+    import json as _json
+    if not OPENAI_AVAILABLE or openai_client is None:
+        return keyword_search_thoughts(conn, query, agent, source, days, limit)
+
+    # Generate query embedding
+    response = openai_client.embeddings.create(model=EMBEDDING_MODEL, input=[query])
+    q_emb = np.array(response.data[0].embedding, dtype=np.float32)
+    q_norm = np.linalg.norm(q_emb)
+
+    # Load all thought embeddings (small dataset, no caching needed)
+    sql = """
+        SELECT t.id, t.content, t.source, t.agent, t.metadata, t.created_at, te.embedding
+        FROM thought_embeddings te
+        JOIN thoughts t ON te.thought_id = t.id
+        WHERE 1=1
+    """
+    params = []
+    if agent:
+        sql += " AND t.agent = ?"
+        params.append(agent)
+    if source:
+        sql += " AND t.source = ?"
+        params.append(source)
+    if days:
+        cutoff = datetime.now() - timedelta(days=days)
+        sql += " AND t.created_at >= ?"
+        params.append(cutoff.isoformat())
+
+    rows = conn.execute(sql, params).fetchall()
+    if not rows:
+        return []
+
+    # Compute cosine similarity
+    candidates = []
+    for row in rows:
+        try:
+            emb = np.frombuffer(row[6], dtype=np.float32)
+            sim = float(np.dot(emb, q_emb) / (np.linalg.norm(emb) * q_norm + 1e-10))
+            if sim >= 0.45:
+                try:
+                    meta = _json.loads(row[4]) if row[4] else {}
+                except Exception:
+                    meta = {}
+                candidates.append(ThoughtResult(
+                    thought_id=row[0], content=row[1], source=row[2], agent=row[3],
+                    metadata=meta,
+                    created_at=datetime.fromisoformat(row[5]) if row[5] else None,
+                    score=sim,
+                ))
+        except Exception:
+            continue
+
+    candidates.sort(key=lambda x: x.score, reverse=True)
+    return candidates[:limit]
+
+
+def search_thoughts(
+    query: str,
+    agent: Optional[str] = None,
+    source: Optional[str] = None,
+    days: Optional[int] = None,
+    semantic: bool = False,
+    limit: int = 10,
+    db_path: Path = DB_PATH,
+) -> List[ThoughtResult]:
+    """Search captured thoughts. High-level API."""
+    if not db_path.exists():
+        return []
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA journal_mode=WAL")
+
+    openai_client = None
+    if semantic and OPENAI_AVAILABLE:
+        openai_client = OpenAI()
+
+    if semantic:
+        results = semantic_search_thoughts(conn, query, agent, source, days, limit, openai_client)
+    else:
+        results = keyword_search_thoughts(conn, query, agent, source, days, limit)
+
+    conn.close()
+    return results
+
+
 # Python API for agents
 def search_conversations(
     query: str,

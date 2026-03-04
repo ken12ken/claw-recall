@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""
+Claw Recall — MCP Server
+
+FastMCP server exposing memory search and capture tools.
+Runs over stdio for use with Claude Desktop, Cursor, Claude Code.
+
+Usage:
+    python3 mcp_server.py                    # stdio mode (for MCP clients)
+    ssh vps "cd ~/repos/claw-recall && python3 mcp_server.py"  # via SSH
+
+Claude Desktop config (~/.claude/claude_desktop_config.json):
+    {
+      "mcpServers": {
+        "claw-recall": {
+          "command": "ssh",
+          "args": ["vps", "cd /home/clawdbot/repos/claw-recall && python3 mcp_server.py"]
+        }
+      }
+    }
+"""
+
+import sys
+import json
+from pathlib import Path
+
+# Ensure repo is on path
+sys.path.insert(0, str(Path(__file__).parent))
+
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("Claw Recall", instructions="""
+Claw Recall is Rod's AI memory system — 393K+ indexed conversation messages
+and captured thoughts across all agents (Kit, Cyrus, Claude, etc.).
+
+Use search_memory for finding past conversations and thoughts.
+Use capture_thought to save important information for future recall.
+""")
+
+
+@mcp.tool()
+def search_memory(
+    query: str,
+    agent: str = "",
+    semantic: bool = False,
+    files_only: bool = False,
+    convos_only: bool = False,
+    days: int = 0,
+    limit: int = 10,
+) -> str:
+    """Search all memory: conversations, captured thoughts, and markdown files.
+
+    Args:
+        query: Search text (natural language or keywords)
+        agent: Filter by agent name (main/kit, cyrus, damian, etc.)
+        semantic: Force semantic (meaning-based) search instead of keyword
+        files_only: Only search markdown files
+        convos_only: Only search conversations (skip files)
+        days: Limit to last N days (0 = all time)
+        limit: Max results per category
+    """
+    from recall import unified_search, format_unified_results
+
+    results = unified_search(
+        query=query,
+        agent=agent or None,
+        semantic=semantic if semantic else None,
+        files_only=files_only,
+        convos_only=convos_only,
+        days=float(days) if days > 0 else None,
+        limit=limit,
+    )
+    return format_unified_results(results)
+
+
+@mcp.tool()
+def search_thoughts(
+    query: str,
+    agent: str = "",
+    semantic: bool = False,
+    limit: int = 10,
+) -> str:
+    """Search only captured thoughts (not conversations or files).
+
+    Args:
+        query: Search text
+        agent: Filter by agent
+        semantic: Use semantic search
+        limit: Max results
+    """
+    from search import search_thoughts as _search_thoughts
+
+    results = _search_thoughts(
+        query=query,
+        agent=agent or None,
+        semantic=semantic,
+        limit=limit,
+    )
+    if not results:
+        return "No matching thoughts found."
+
+    lines = [f"Found {len(results)} thought(s):\n"]
+    for i, r in enumerate(results, 1):
+        ts = r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "unknown"
+        lines.append(f"#{i} [{r.source}] {ts} — {r.content[:300]}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def capture_thought(
+    content: str,
+    source: str = "mcp",
+    agent: str = "",
+) -> str:
+    """Capture a thought, note, or piece of information into memory.
+
+    Args:
+        content: The thought or note to capture
+        source: Origin (mcp, manual, observation)
+        agent: Which agent is capturing this
+    """
+    from capture import capture_thought as _capture
+
+    result = _capture(
+        content=content,
+        source=source,
+        agent=agent or None,
+    )
+    if "error" in result:
+        return f"Error: {result['error']}"
+    embedded = "with embedding" if result.get("embedded") else "without embedding"
+    return f"Captured thought #{result['id']} ({embedded})"
+
+
+@mcp.tool()
+def browse_activity(
+    agent: str = "",
+    days: int = 14,
+    limit: int = 10,
+) -> str:
+    """Browse recent agent conversation activity.
+
+    Args:
+        agent: Filter by agent name
+        days: How many days back to look
+        limit: Max sessions to return
+    """
+    import sqlite3
+    from search import DB_PATH
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute("PRAGMA journal_mode=WAL")
+
+    sql = """
+        SELECT s.agent_id, s.started_at, s.message_count,
+               (SELECT content FROM messages m WHERE m.session_id = s.id
+                AND m.role = 'user' ORDER BY m.message_index ASC LIMIT 1) as first_msg
+        FROM sessions s
+        WHERE s.message_count > 2
+          AND LENGTH(s.agent_id) BETWEEN 2 AND 14
+          AND s.agent_id NOT GLOB '[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]*'
+    """
+    params = []
+    if agent:
+        sql += " AND s.agent_id = ?"
+        params.append(agent)
+    if days > 0:
+        sql += " AND s.started_at >= datetime('now', ?)"
+        params.append(f"-{days} days")
+    sql += " ORDER BY s.started_at DESC LIMIT ?"
+    params.append(limit)
+
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+
+    if not rows:
+        return "No recent activity found."
+
+    lines = [f"Recent activity ({len(rows)} sessions):\n"]
+    for row in rows:
+        agent_id, started, msg_count, first_msg = row
+        first_msg = (first_msg or "")[:150]
+        lines.append(f"- [{agent_id}] {started} ({msg_count} msgs): {first_msg}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def memory_stats() -> str:
+    """Get statistics about the memory database."""
+    from setup_db import get_db_stats
+    from search import cache_status
+
+    stats = get_db_stats()
+    cache = cache_status()
+
+    lines = [
+        "Claw Recall Memory Stats:",
+        f"  Sessions: {stats.get('sessions', 0):,}",
+        f"  Messages: {stats.get('messages', 0):,}",
+        f"  Embeddings: {stats.get('embeddings', 0):,}",
+        f"  Thoughts: {stats.get('thoughts', 0):,}",
+        f"  Thought embeddings: {stats.get('thought_embeddings', 0):,}",
+        f"  DB size: {stats.get('file_size_mb', 0)} MB",
+        f"  Agents: {', '.join(stats.get('agents', []))}",
+        f"\nEmbedding cache:",
+        f"  Loaded: {cache.get('loaded', False)}",
+        f"  Rows: {cache.get('rows', 0):,}",
+        f"  Memory: {cache.get('memory_mb', 0)} MB",
+    ]
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")
