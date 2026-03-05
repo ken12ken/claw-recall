@@ -46,25 +46,21 @@ CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role);
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
 
 -- Full-text search virtual table (FTS5)
+-- Only indexes content; agent_id comes from sessions JOIN at query time
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content,
-    session_id UNINDEXED,
-    message_id UNINDEXED,
-    agent_id UNINDEXED,
     content='messages',
     content_rowid='id'
 );
 
 -- Triggers to keep FTS in sync
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-    INSERT INTO messages_fts(rowid, content, session_id, message_id, agent_id)
-    SELECT NEW.id, NEW.content, NEW.session_id, NEW.id, 
-           (SELECT agent_id FROM sessions WHERE id = NEW.session_id);
+    INSERT INTO messages_fts(rowid, content) VALUES (NEW.id, NEW.content);
 END;
 
 CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content, session_id, message_id, agent_id)
-    VALUES('delete', OLD.id, OLD.content, OLD.session_id, OLD.id, NULL);
+    INSERT INTO messages_fts(messages_fts, rowid, content)
+    VALUES('delete', OLD.id, OLD.content);
 END;
 
 -- Embeddings table for semantic search

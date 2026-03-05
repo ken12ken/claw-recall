@@ -55,6 +55,8 @@ AGENT_NAME_MAP = {
     'claude': 'Claude',
     'claude-code': 'CC',
     'cc': 'CC',
+    'cc-vps': 'CC-VPS',
+    'gemini': 'gemini',
     'cyrus': 'cyrus',
     'damian': 'damian',
     'hale': 'hale',
@@ -107,6 +109,7 @@ def extract_session_metadata(filepath: Path) -> dict:
     }
 
     # === PHASE 1: Path-based detection (most reliable) ===
+    # Specific archive dirs checked BEFORE the generic archive pattern
 
     # Pattern: /agents/{agent_name}/sessions/{file}.jsonl (active sessions)
     agents_match = re.search(r'/agents/([^/]+)/sessions/', path_str)
@@ -114,24 +117,29 @@ def extract_session_metadata(filepath: Path) -> dict:
         metadata['agent_id'] = _normalize_agent_id(agents_match.group(1))
         metadata['channel'] = 'direct'
 
-    # Pattern: /agents-archive/{agent_name}/{file} (archived, agent subdirs)
+    # Pattern: /agents-archive-cc/ (synced CC desktop archive)
     if metadata['agent_id'] == 'unknown':
-        archive_subdir = re.search(r'/agents-archive[^/]*/([^/]+)/', path_str)
-        if archive_subdir:
-            metadata['agent_id'] = _normalize_agent_id(archive_subdir.group(1))
-            metadata['channel'] = 'direct'
+        if '/agents-archive-cc/' in path_str:
+            metadata['agent_id'] = 'CC'
+            metadata['channel'] = 'terminal'
 
     # Pattern: /agents-archive-claude/ (synced Claude archive)
     if metadata['agent_id'] == 'unknown':
-        if '/agents-archive-claude' in path_str:
+        if '/agents-archive-claude/' in path_str:
             metadata['agent_id'] = 'Claude'
             metadata['channel'] = 'direct'
 
     # Pattern: /agents-archive-vps/ (synced VPS archive — these are Kit's)
     if metadata['agent_id'] == 'unknown':
         if '/agents-archive-vps/' in path_str:
-            # Files in VPS archive are Kit's unless filename says otherwise
             metadata['agent_id'] = 'Kit'
+            metadata['channel'] = 'direct'
+
+    # Pattern: /agents-archive/{agent_name}/{file} (generic archived, agent subdirs)
+    if metadata['agent_id'] == 'unknown':
+        archive_subdir = re.search(r'/agents-archive/([^/]+)/', path_str)
+        if archive_subdir:
+            metadata['agent_id'] = _normalize_agent_id(archive_subdir.group(1))
             metadata['channel'] = 'direct'
 
     # Pattern: /agents-grok-sessions/ or /agents-chat-sessions/
@@ -146,9 +154,14 @@ def extract_session_metadata(filepath: Path) -> dict:
             metadata['channel'] = 'direct'
 
     # Pattern: .claude/projects/ (Claude Code sessions)
+    # /home/clawdbot/.claude/projects/ = CC-VPS (Claude Code on VPS)
+    # /home/rodbland/.claude/projects/ = CC (Claude Code on WSL)
     if metadata['agent_id'] == 'unknown':
         if '.claude/projects' in path_str:
-            metadata['agent_id'] = 'CC'
+            if '/home/clawdbot/' in path_str:
+                metadata['agent_id'] = 'CC-VPS'
+            else:
+                metadata['agent_id'] = 'CC'
             metadata['channel'] = 'terminal'
             # Check if tagged as telegram session
             session_id = filepath.stem
