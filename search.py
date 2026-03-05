@@ -157,7 +157,7 @@ def keyword_search(
     params = [fts_query]
 
     if agent:
-        sql += " AND s.agent_id = ?"
+        sql += " AND s.agent_id = ? COLLATE NOCASE"
         params.append(agent)
 
     if channel:
@@ -240,8 +240,8 @@ def _build_embedding_cache(conn: sqlite3.Connection, agent=None, channel=None,
     """
     params = []
     if agent:
-        count_sql += " AND s.agent_id = ?"
-        data_sql += " AND s.agent_id = ?"
+        count_sql += " AND s.agent_id = ? COLLATE NOCASE"
+        data_sql += " AND s.agent_id = ? COLLATE NOCASE"
         params.append(agent)
     if channel:
         count_sql += " AND s.channel = ?"
@@ -469,7 +469,7 @@ def keyword_search_thoughts(
     """
     params = [fts_query]
     if agent:
-        sql += " AND t.agent = ?"
+        sql += " AND t.agent = ? COLLATE NOCASE"
         params.append(agent)
     if source:
         sql += " AND t.source = ?"
@@ -524,7 +524,7 @@ def semantic_search_thoughts(
     """
     params = []
     if agent:
-        sql += " AND t.agent = ?"
+        sql += " AND t.agent = ? COLLATE NOCASE"
         params.append(agent)
     if source:
         sql += " AND t.source = ?"

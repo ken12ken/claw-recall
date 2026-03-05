@@ -463,7 +463,7 @@ def activity_endpoint():
             """
             params = []
             if agent:
-                sql += " AND s.agent_id = ?"
+                sql += " AND s.agent_id = ? COLLATE NOCASE"
                 params.append(agent)
             if days > 0:
                 sql += " AND s.started_at >= datetime('now', ?)"
