@@ -246,7 +246,7 @@ def _log_capture(conn: sqlite3.Connection, source_type: str, source_id: str,
 # ─── Gmail Capture ────────────────────────────────────────────────────────────
 
 def poll_gmail(account: str = None, limit: int = GMAIL_POLL_LIMIT,
-               full_body: bool = False, filter_noise: bool = True) -> dict:
+               full_body: bool = True, filter_noise: bool = True) -> dict:
     """
     Poll Gmail for new emails and capture them as thoughts.
 
@@ -269,8 +269,17 @@ def poll_gmail(account: str = None, limit: int = GMAIL_POLL_LIMIT,
     try:
         for acct in accounts:
             try:
-                emails = list_inbox(acct, limit=limit, query='in:inbox')
-                log.info(f"Gmail [{acct}]: {len(emails)} inbox messages")
+                # Scan both inbox and sent mail
+                inbox_emails = list_inbox(acct, limit=limit, query='in:inbox')
+                sent_emails = list_inbox(acct, limit=limit // 2, query='in:sent')
+                # Merge, dedup by msg_id (sent replies also appear in inbox)
+                seen_ids = {e['id'] for e in inbox_emails}
+                emails = list(inbox_emails)
+                for e in sent_emails:
+                    if e['id'] not in seen_ids:
+                        emails.append(e)
+                        seen_ids.add(e['id'])
+                log.info(f"Gmail [{acct}]: {len(inbox_emails)} inbox + {len(sent_emails)} sent = {len(emails)} unique")
 
                 for email_meta in emails:
                     msg_id = email_meta['id']

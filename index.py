@@ -111,10 +111,17 @@ def extract_session_metadata(filepath: Path) -> dict:
     # === PHASE 1: Path-based detection (most reliable) ===
     # Specific archive dirs checked BEFORE the generic archive pattern
 
+    # WSL detection: /home/rodbland/ = WSL machine, 'main' agent = Claude (not Kit)
+    is_wsl = '/home/rodbland/' in path_str
+
     # Pattern: /agents/{agent_name}/sessions/{file}.jsonl (active sessions)
     agents_match = re.search(r'/agents/([^/]+)/sessions/', path_str)
     if agents_match:
-        metadata['agent_id'] = _normalize_agent_id(agents_match.group(1))
+        raw = agents_match.group(1)
+        if is_wsl and raw == 'main':
+            metadata['agent_id'] = 'Claude'
+        else:
+            metadata['agent_id'] = _normalize_agent_id(raw)
         metadata['channel'] = 'direct'
 
     # Pattern: /agents-archive-cc/ (synced CC desktop archive)
@@ -185,8 +192,12 @@ def extract_session_metadata(filepath: Path) -> dict:
         raw_agent = parts[1]
         if metadata['agent_id'] == 'unknown' or metadata['agent_id'] in ('Kit', 'Claude'):
             # Filename agent overrides only if it's a known agent and path gave us a generic answer
+            # BUT: on WSL, 'main' = Claude, not Kit — don't let filename override back
             if raw_agent.lower() in KNOWN_AGENTS:
-                metadata['agent_id'] = _normalize_agent_id(raw_agent)
+                if is_wsl and raw_agent == 'main':
+                    metadata['agent_id'] = 'Claude'
+                else:
+                    metadata['agent_id'] = _normalize_agent_id(raw_agent)
         # Always extract channel from filename if available
         if len(parts) >= 3:
             metadata['channel'] = parts[2]
@@ -209,7 +220,10 @@ def extract_session_metadata(filepath: Path) -> dict:
     if metadata['agent_id'] == 'unknown' and parts:
         raw = parts[0].lower()
         if raw in KNOWN_AGENTS:
-            metadata['agent_id'] = _normalize_agent_id(raw)
+            if is_wsl and raw == 'main':
+                metadata['agent_id'] = 'Claude'
+            else:
+                metadata['agent_id'] = _normalize_agent_id(raw)
         elif _is_hex_id(parts[0]):
             # Hex ID fragment — this is what we're trying to avoid
             # Try to infer from parent directory name

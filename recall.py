@@ -173,6 +173,15 @@ def unified_search(
                 days=int(days) if days else None,
                 limit=limit,
             )
+            # Fallback: if semantic returned 0 and wasn't forced, retry keyword
+            if not thought_results and use_semantic and semantic is None:
+                thought_results = search_thoughts(
+                    query=query,
+                    agent=agent,
+                    semantic=False,
+                    days=int(days) if days else None,
+                    limit=limit,
+                )
             return [
                 {
                     "id": r.thought_id,
@@ -192,7 +201,7 @@ def unified_search(
         try:
             # Auto-detect semantic vs keyword if not explicitly set
             use_semantic = semantic if semantic is not None else should_use_semantic(query)
-            
+
             convo_results = search_conversations(
                 query=query,
                 agent=agent,
@@ -202,6 +211,19 @@ def unified_search(
                 date_from=date_from,
                 date_to=date_to
             )
+
+            # Fallback: if semantic returned 0 results and wasn't forced, retry with keyword
+            if not convo_results and use_semantic and semantic is None:
+                convo_results = search_conversations(
+                    query=query,
+                    agent=agent,
+                    semantic=False,
+                    limit=limit,
+                    days=days,
+                    date_from=date_from,
+                    date_to=date_to
+                )
+
             return [
                 {
                     "agent": r.agent_id,
