@@ -7,6 +7,7 @@ Stores thoughts with optional embeddings for semantic search.
 """
 
 import json
+import hashlib
 import sqlite3
 import numpy as np
 from pathlib import Path
@@ -23,6 +24,18 @@ except ImportError:
 DB_PATH = Path(__file__).parent / "convo_memory.db"
 EMBEDDING_MODEL = "text-embedding-3-small"
 MIN_CONTENT_LENGTH = 10  # Minimum content length to generate embedding
+
+# Module-level client — reused across calls to avoid per-call instantiation
+_openai_client = None
+
+def _get_openai_client() -> Optional['OpenAI']:
+    """Get or create a reusable OpenAI client."""
+    global _openai_client
+    if not OPENAI_AVAILABLE:
+        return None
+    if _openai_client is None:
+        _openai_client = OpenAI()
+    return _openai_client
 
 
 def _get_db() -> sqlite3.Connection:
@@ -74,6 +87,7 @@ def capture_thought(
     if not content:
         return {"error": "Empty content"}
 
+    content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
     metadata_json = json.dumps(metadata or {})
     close_conn = False
 
@@ -81,6 +95,17 @@ def capture_thought(
         if conn is None:
             conn = _get_db()
             close_conn = True
+
+        # Dedup: check if identical content was captured recently (last 24h)
+        existing = conn.execute(
+            """SELECT id FROM thoughts
+               WHERE content = ? AND created_at >= datetime('now', '-1 day')
+               LIMIT 1""",
+            (content,)
+        ).fetchone()
+        if existing:
+            return {"id": existing[0], "content": content, "source": source,
+                    "agent": agent, "duplicate": True, "created_at": datetime.now().isoformat()}
 
         cursor = conn.execute(
             "INSERT INTO thoughts (content, source, agent, metadata) VALUES (?, ?, ?, ?)",
@@ -91,7 +116,7 @@ def capture_thought(
         # Generate and store embedding
         embed_stored = False
         if generate_embedding and len(content) >= MIN_CONTENT_LENGTH:
-            openai_client = OpenAI() if OPENAI_AVAILABLE else None
+            openai_client = _get_openai_client()
             embedding = _generate_embedding(content, openai_client)
             if embedding is not None:
                 conn.execute(
@@ -179,6 +204,74 @@ def delete_thought(thought_id: int, conn: sqlite3.Connection = None) -> dict:
         if cursor.rowcount == 0:
             return {"error": f"Thought {thought_id} not found"}
         return {"deleted": thought_id}
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        if close_conn and conn:
+            conn.close()
+
+
+def batch_embed_thoughts(thought_ids: list[int] = None, conn: sqlite3.Connection = None) -> dict:
+    """Batch-generate embeddings for thoughts that don't have them yet.
+
+    Uses OpenAI batch embedding API (up to 2048 inputs per call).
+    Much faster than per-thought embedding for bulk captures.
+    """
+    client = _get_openai_client()
+    if client is None:
+        return {"error": "OpenAI not available"}
+
+    close_conn = False
+    try:
+        if conn is None:
+            conn = _get_db()
+            close_conn = True
+
+        # Find thoughts without embeddings
+        if thought_ids:
+            placeholders = ','.join('?' * len(thought_ids))
+            rows = conn.execute(
+                f"""SELECT t.id, t.content FROM thoughts t
+                    LEFT JOIN thought_embeddings te ON te.thought_id = t.id
+                    WHERE t.id IN ({placeholders}) AND te.id IS NULL
+                      AND LENGTH(t.content) >= ?""",
+                thought_ids + [MIN_CONTENT_LENGTH]
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT t.id, t.content FROM thoughts t
+                   LEFT JOIN thought_embeddings te ON te.thought_id = t.id
+                   WHERE te.id IS NULL AND LENGTH(t.content) >= ?""",
+                (MIN_CONTENT_LENGTH,)
+            ).fetchall()
+
+        if not rows:
+            return {"embedded": 0, "total": 0}
+
+        # Batch embed (max 2048 per API call)
+        BATCH_SIZE = 2048
+        total_embedded = 0
+
+        for i in range(0, len(rows), BATCH_SIZE):
+            batch = rows[i:i + BATCH_SIZE]
+            texts = [r[1][:2000] for r in batch]
+            ids = [r[0] for r in batch]
+
+            try:
+                response = client.embeddings.create(model=EMBEDDING_MODEL, input=texts)
+                for j, emb_data in enumerate(response.data):
+                    embedding = np.array(emb_data.embedding, dtype=np.float32)
+                    conn.execute(
+                        "INSERT INTO thought_embeddings (thought_id, embedding, model) VALUES (?, ?, ?)",
+                        (ids[j], embedding.tobytes(), EMBEDDING_MODEL)
+                    )
+                total_embedded += len(batch)
+            except Exception as e:
+                print(f"Batch embedding error: {e}")
+
+        conn.commit()
+        return {"embedded": total_embedded, "total": len(rows)}
+
     except Exception as e:
         return {"error": str(e)}
     finally:

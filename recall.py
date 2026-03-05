@@ -268,7 +268,10 @@ def unified_search(
     parts = [f"{conv_count} conversation matches", f"{file_count} file matches"]
     if thought_count > 0:
         parts.append(f"{thought_count} thought matches")
-    results["summary"] = "Found " + " and ".join(parts)
+    if len(parts) <= 2:
+        results["summary"] = "Found " + " and ".join(parts)
+    else:
+        results["summary"] = "Found " + ", ".join(parts[:-1]) + ", and " + parts[-1]
     
     return results
 

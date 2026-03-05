@@ -42,7 +42,8 @@ Use capture_thought to save important information for future recall.
 def search_memory(
     query: str,
     agent: str = "",
-    semantic: bool = False,
+    force_semantic: bool = False,
+    force_keyword: bool = False,
     files_only: bool = False,
     convos_only: bool = False,
     days: int = 0,
@@ -50,10 +51,14 @@ def search_memory(
 ) -> str:
     """Search all memory: conversations, captured thoughts, and markdown files.
 
+    Auto-detects whether to use semantic (meaning-based) or keyword search.
+    Use force_semantic or force_keyword to override.
+
     Args:
         query: Search text (natural language or keywords)
         agent: Filter by agent name (main/kit, cyrus, damian, etc.)
-        semantic: Force semantic (meaning-based) search instead of keyword
+        force_semantic: Force semantic search (for conceptual questions)
+        force_keyword: Force keyword search (for exact terms, IDs)
         files_only: Only search markdown files
         convos_only: Only search conversations (skip files)
         days: Limit to last N days (0 = all time)
@@ -61,10 +66,17 @@ def search_memory(
     """
     from recall import unified_search, format_unified_results
 
+    # None = auto-detect, True = semantic, False = keyword
+    semantic = None
+    if force_semantic:
+        semantic = True
+    elif force_keyword:
+        semantic = False
+
     results = unified_search(
         query=query,
         agent=agent or None,
-        semantic=semantic if semantic else None,
+        semantic=semantic,
         files_only=files_only,
         convos_only=convos_only,
         days=float(days) if days > 0 else None,
@@ -181,6 +193,55 @@ def browse_activity(
         agent_id, started, msg_count, first_msg = row
         first_msg = (first_msg or "")[:150]
         lines.append(f"- [{agent_id}] {started} ({msg_count} msgs): {first_msg}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def poll_sources(
+    source: str = "all",
+    account: str = "",
+    limit: int = 50,
+) -> str:
+    """Poll external sources (Gmail, Google Drive, Slack) for new content to capture.
+
+    Args:
+        source: Which source to poll — 'gmail', 'drive', 'slack', or 'all'
+        account: Account to poll — 'personal', 'rbs', or '' for both
+        limit: Max items to check per account
+    """
+    from capture_sources import poll_gmail, poll_drive, poll_slack
+
+    lines = []
+    if source in ('gmail', 'all'):
+        g = poll_gmail(account=account or None, limit=limit)
+        lines.append(f"Gmail: {g['captured']} captured, {g['skipped']} skipped, {g['errors']} errors")
+    if source in ('drive', 'all'):
+        d = poll_drive(account=account or None, limit=limit)
+        lines.append(f"Drive: {d['captured']} captured, {d.get('updated', 0)} updated, "
+                      f"{d['skipped']} skipped, {d['errors']} errors")
+    if source in ('slack', 'all'):
+        s = poll_slack(limit=limit)
+        if 'error' in s:
+            lines.append(f"Slack: {s['error']}")
+        else:
+            lines.append(f"Slack: {s['captured']} captured, {s['skipped']} skipped, "
+                          f"{s['errors']} errors ({s['channels']} channels)")
+    return "\n".join(lines) if lines else "No sources polled."
+
+
+@mcp.tool()
+def capture_source_status() -> str:
+    """Get statistics about captured external sources (Gmail, Drive, etc.)."""
+    from capture_sources import capture_status
+    stats = capture_status()
+    lines = [f"Total captured: {stats.get('total', 0)}"]
+    for key, count in sorted(stats.items()):
+        if key not in ('total', 'latest'):
+            lines.append(f"  {key}: {count}")
+    if stats.get('latest'):
+        lines.append("\nLatest captures:")
+        for key, ts in stats['latest'].items():
+            lines.append(f"  {key}: {ts}")
     return "\n".join(lines)
 
 

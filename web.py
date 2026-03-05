@@ -143,6 +143,38 @@ def capture_endpoint():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/capture/poll', methods=['POST'])
+def capture_poll_endpoint():
+    """Trigger a capture poll for external sources (Gmail, Drive)."""
+    try:
+        data = request.get_json(silent=True) or {}
+        source = data.get('source', 'all')
+        account = data.get('account')
+        limit = _safe_int(data.get('limit', '50'), 50, lo=1, hi=200)
+
+        from capture_sources import poll_gmail, poll_drive
+        results = {}
+
+        if source in ('gmail', 'all'):
+            results['gmail'] = poll_gmail(account=account, limit=limit)
+        if source in ('drive', 'all'):
+            results['drive'] = poll_drive(account=account, limit=limit)
+
+        return jsonify(results), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/capture/status')
+def capture_status_endpoint():
+    """Get capture log statistics."""
+    try:
+        from capture_sources import capture_status
+        return jsonify(capture_status())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/thoughts')
 def thoughts_endpoint():
     """List or search captured thoughts."""

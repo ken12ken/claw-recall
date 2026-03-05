@@ -118,6 +118,13 @@ CREATE TRIGGER IF NOT EXISTS thoughts_ai AFTER INSERT ON thoughts BEGIN
     VALUES (new.id, new.content, new.metadata, new.source, new.agent);
 END;
 
+CREATE TRIGGER IF NOT EXISTS thoughts_au AFTER UPDATE ON thoughts BEGIN
+    INSERT INTO thoughts_fts(thoughts_fts, rowid, content, metadata, source, agent)
+    VALUES ('delete', old.id, old.content, old.metadata, old.source, old.agent);
+    INSERT INTO thoughts_fts(rowid, content, metadata, source, agent)
+    VALUES (new.id, new.content, new.metadata, new.source, new.agent);
+END;
+
 CREATE TRIGGER IF NOT EXISTS thoughts_ad AFTER DELETE ON thoughts BEGIN
     INSERT INTO thoughts_fts(thoughts_fts, rowid, content, metadata, source, agent)
     VALUES ('delete', old.id, old.content, old.metadata, old.source, old.agent);
@@ -134,6 +141,20 @@ CREATE TABLE IF NOT EXISTS thought_embeddings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_thought_embeddings_thought ON thought_embeddings(thought_id);
+
+-- Capture log: tracks what's been ingested from external sources (Gmail, Drive, Slack)
+CREATE TABLE IF NOT EXISTS capture_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_type TEXT NOT NULL,      -- 'gmail', 'drive', 'slack'
+    source_id TEXT NOT NULL,        -- message_id, doc_id, channel+ts
+    account TEXT,                   -- 'personal', 'rbs'
+    thought_id INTEGER,             -- FK to thoughts.id
+    source_modified TEXT,           -- modifiedTime for Drive docs (detect updates)
+    captured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source_type, source_id, account)
+);
+
+CREATE INDEX IF NOT EXISTS idx_capture_log_source ON capture_log(source_type, account);
 """
 
 
