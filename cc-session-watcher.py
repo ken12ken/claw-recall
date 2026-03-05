@@ -183,6 +183,8 @@ def update_state(state: dict, filepath: Path):
 
 # --- File Push ---
 
+_oversized_warned: set = set()  # Only log oversized warning once per file
+
 def push_file(filepath: Path, dry_run: bool = False) -> dict:
     """Push a session file to the VPS for indexing."""
     try:
@@ -191,7 +193,9 @@ def push_file(filepath: Path, dry_run: bool = False) -> dict:
         return {"status": "error", "reason": "file_not_found"}
 
     if file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
-        log.warning(f"Skipping {filepath.name} ({file_size // (1024*1024)}MB > {MAX_FILE_SIZE_MB}MB limit)")
+        if filepath.name not in _oversized_warned:
+            log.warning(f"Skipping {filepath.name} ({file_size // (1024*1024)}MB > {MAX_FILE_SIZE_MB}MB limit) — suppressing further warnings")
+            _oversized_warned.add(filepath.name)
         return {"status": "skipped", "reason": "too_large"}
 
     if file_size == 0:

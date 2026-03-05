@@ -403,8 +403,9 @@ def index_session_file(
         conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         conn.execute("DELETE FROM index_log WHERE id = ?", (existing[0],))
     
-    # Extract metadata
-    metadata = extract_session_metadata(filepath)
+    # Extract metadata — use original source path for agent detection when available
+    metadata_path = Path(source_file_override) if source_file_override else filepath
+    metadata = extract_session_metadata(metadata_path)
     
     # Extract messages
     messages, first_ts, last_ts = extract_messages(filepath)
