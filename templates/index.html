@@ -691,8 +691,9 @@
 
         function renderResultCard(r, idx, query) {
             if (r.error) return '<div class="result-card">' + escapeHtml(r.error) + '</div>';
-            const dateStr = r.timestamp ? r.timestamp.substring(0, 10) : '';
-            const timeStr = r.timestamp ? r.timestamp.substring(11, 16) : '';
+            const tsDate = r.timestamp ? new Date(r.timestamp) : null;
+            const dateStr = tsDate ? tsDate.getFullYear() + '-' + String(tsDate.getMonth()+1).padStart(2,'0') + '-' + String(tsDate.getDate()).padStart(2,'0') : '';
+            const timeStr = tsDate ? String(tsDate.getHours()).padStart(2,'0') + ':' + String(tsDate.getMinutes()).padStart(2,'0') : '';
             const display = agentDisplayName(r.agent);
             const badgeStyle = agentBadgeStyle(r.agent);
             const content = cleanNoise(r.content || '');
@@ -907,7 +908,8 @@
                 roleSpan.className = 'convo-role';
                 roleSpan.textContent = role;
                 roleLine.appendChild(roleSpan);
-                const time = m.timestamp ? m.timestamp.substring(11, 16) : '';
+                const _td = m.timestamp ? new Date(m.timestamp) : null;
+                const time = _td ? String(_td.getHours()).padStart(2,'0') + ':' + String(_td.getMinutes()).padStart(2,'0') : '';
                 if (time) {
                     const timeSpan = document.createElement('span');
                     timeSpan.className = 'convo-time';
@@ -1074,8 +1076,9 @@
                 const s = sessions[i];
                 const display = agentDisplayName(s.agent);
                 const badgeStyle = agentBadgeStyle(s.agent);
-                const dateStr = s.started_at ? s.started_at.substring(0, 10) : '';
-                const timeStr = s.started_at ? s.started_at.substring(11, 16) : '';
+                const _sd = s.started_at ? new Date(s.started_at) : null;
+                const dateStr = _sd ? _sd.getFullYear() + '-' + String(_sd.getMonth()+1).padStart(2,'0') + '-' + String(_sd.getDate()).padStart(2,'0') : '';
+                const timeStr = _sd ? String(_sd.getHours()).padStart(2,'0') + ':' + String(_sd.getMinutes()).padStart(2,'0') : '';
                 const preview = cleanNoise(s.first_user_message || '');
                 const truncated = preview.length > TRUNCATE_LEN ? preview.substring(0, TRUNCATE_LEN) + '...' : preview;
                 const cardId = 'act-' + i;
