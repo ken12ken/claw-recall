@@ -45,13 +45,16 @@ WATCH_DIRS = [
 ]
 
 VPS_ENDPOINT = "http://localhost:18765/index-session"
+VPS_INDEX_LOCAL_ENDPOINT = "http://localhost:18765/index-local"
+VPS_REMOTE_STAGING = "/tmp/claw-recall-remote"
 SSH_LOCAL_PORT = 18765
 SSH_REMOTE_HOST = "172.17.0.1"
 SSH_REMOTE_PORT = 8765
 SSH_HOST = "vps"
 
 DEBOUNCE_SECONDS = 10
-MAX_FILE_SIZE_MB = 200
+MAX_FILE_SIZE_MB = 200  # HTTP upload limit; larger files use rsync
+RSYNC_MAX_FILE_SIZE_MB = 600  # Absolute max for rsync fallback
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 10  # seconds, multiplied by attempt number
 
@@ -183,7 +186,70 @@ def update_state(state: dict, filepath: Path):
 
 # --- File Push ---
 
-_oversized_warned: set = set()  # Only log oversized warning once per file
+def _rsync_push(filepath: Path, dry_run: bool = False) -> dict:
+    """Push an oversized file via rsync (delta transfer) + trigger local indexing."""
+    try:
+        file_size = filepath.stat().st_size
+    except OSError:
+        return {"status": "error", "reason": "file_not_found"}
+
+    source_path = str(filepath)
+    # Build VPS staging path preserving directory structure for agent detection
+    for marker in ['.claude/projects', '.openclaw/agents', '.openclaw/agents-archive']:
+        idx = source_path.find(marker)
+        if idx >= 0:
+            path_suffix = source_path[idx:]
+            break
+    else:
+        path_suffix = filepath.name
+
+    remote_path = f"{VPS_REMOTE_STAGING}/{os.path.dirname(path_suffix)}/"
+
+    if dry_run:
+        log.info(f"[DRY RUN] Would rsync: {filepath.name} ({file_size // (1024*1024)}MB) -> {remote_path}")
+        return {"status": "dry_run"}
+
+    # Ensure remote directory exists and rsync the file
+    try:
+        mkdir_result = subprocess.run(
+            ["ssh", SSH_HOST, f"mkdir -p {remote_path}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if mkdir_result.returncode != 0:
+            log.error(f"rsync mkdir failed: {mkdir_result.stderr.strip()}")
+            return {"status": "error", "reason": "mkdir_failed"}
+
+        rsync_result = subprocess.run(
+            ["rsync", "-az", "--inplace", str(filepath), f"{SSH_HOST}:{remote_path}"],
+            capture_output=True, text=True, timeout=600,
+        )
+        if rsync_result.returncode != 0:
+            log.error(f"rsync failed: {rsync_result.stderr.strip()}")
+            return {"status": "error", "reason": "rsync_failed"}
+    except subprocess.TimeoutExpired:
+        log.error(f"rsync timed out for {filepath.name}")
+        return {"status": "error", "reason": "rsync_timeout"}
+    except Exception as e:
+        log.error(f"rsync error: {e}")
+        return {"status": "error", "reason": str(e)}
+
+    # Trigger local indexing on VPS via the SSH tunnel
+    remote_file = f"{VPS_REMOTE_STAGING}/{path_suffix}"
+    try:
+        response = requests.post(
+            VPS_INDEX_LOCAL_ENDPOINT,
+            json={"filepath": remote_file, "source_path": source_path},
+            timeout=600,
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            log.warning(f"index-local failed ({response.status_code}): {response.text[:200]}")
+            return {"status": "error", "reason": f"index_local_{response.status_code}"}
+    except Exception as e:
+        log.error(f"index-local request error: {e}")
+        return {"status": "error", "reason": str(e)}
+
 
 def push_file(filepath: Path, dry_run: bool = False) -> dict:
     """Push a session file to the VPS for indexing."""
@@ -192,11 +258,16 @@ def push_file(filepath: Path, dry_run: bool = False) -> dict:
     except OSError:
         return {"status": "error", "reason": "file_not_found"}
 
-    if file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
-        if filepath.name not in _oversized_warned:
-            log.warning(f"Skipping {filepath.name} ({file_size // (1024*1024)}MB > {MAX_FILE_SIZE_MB}MB limit) — suppressing further warnings")
-            _oversized_warned.add(filepath.name)
+    max_http = MAX_FILE_SIZE_MB * 1024 * 1024
+    max_rsync = RSYNC_MAX_FILE_SIZE_MB * 1024 * 1024
+
+    if file_size > max_rsync:
+        log.warning(f"Skipping {filepath.name} ({file_size // (1024*1024)}MB > {RSYNC_MAX_FILE_SIZE_MB}MB absolute limit)")
         return {"status": "skipped", "reason": "too_large"}
+
+    if file_size > max_http:
+        log.info(f"Large file {filepath.name} ({file_size // (1024*1024)}MB) — using rsync")
+        return _rsync_push(filepath, dry_run)
 
     if file_size == 0:
         return {"status": "skipped", "reason": "empty_file"}
@@ -266,7 +337,13 @@ class SessionFileHandler(FileSystemEventHandler):
         with self._lock:
             if path in self._pending:
                 self._pending[path].cancel()
-            timer = threading.Timer(DEBOUNCE_SECONDS, self._fire, args=[path])
+            # Longer debounce for large files (rsync is heavier than HTTP upload)
+            try:
+                size = os.path.getsize(path)
+                delay = 120 if size > MAX_FILE_SIZE_MB * 1024 * 1024 else DEBOUNCE_SECONDS
+            except OSError:
+                delay = DEBOUNCE_SECONDS
+            timer = threading.Timer(delay, self._fire, args=[path])
             timer.daemon = True
             timer.start()
             self._pending[path] = timer

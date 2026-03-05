@@ -253,6 +253,45 @@ def index_session_endpoint():
             pass
 
 
+@app.route('/index-local', methods=['POST'])
+def index_local_endpoint():
+    """Index a local file that was rsync'd to VPS (for oversized files).
+
+    Expects JSON: {"filepath": "/tmp/claw-recall-remote/...", "source_path": "/home/rodbland/..."}
+    """
+    data = request.get_json(silent=True) or {}
+    filepath_str = data.get('filepath', '')
+    source_path = data.get('source_path', '')
+
+    if not filepath_str or not source_path:
+        return jsonify({"error": "filepath and source_path required"}), 400
+
+    filepath = Path(filepath_str)
+    if not filepath.exists():
+        return jsonify({"error": f"File not found: {filepath_str}"}), 404
+    if not filepath_str.startswith(REMOTE_INDEX_TEMP_DIR):
+        return jsonify({"error": "filepath must be within staging directory"}), 403
+
+    try:
+        from index import index_session_file
+        conn = _get_db()
+        conn.execute("PRAGMA busy_timeout=60000")
+        try:
+            result = index_session_file(
+                filepath, conn,
+                generate_embeds=False,
+                source_file_override=source_path,
+            )
+            log.info(f"index-local: {filepath.name} -> {result.get('status')} "
+                     f"({result.get('messages', 0)} msgs, agent={result.get('agent', '?')})")
+            return jsonify(result), 200
+        finally:
+            conn.close()
+    except Exception as e:
+        log.error(f"index-local error for {filepath.name}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/thoughts')
 def thoughts_endpoint():
     """List or search captured thoughts."""
