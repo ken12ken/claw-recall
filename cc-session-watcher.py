@@ -339,12 +339,7 @@ class SessionFileHandler(FileSystemEventHandler):
         with self._lock:
             if path in self._pending:
                 self._pending[path].cancel()
-            # Longer debounce for large files (rsync is heavier than HTTP upload)
-            try:
-                size = os.path.getsize(path)
-                delay = 120 if size > MAX_FILE_SIZE_MB * 1024 * 1024 else DEBOUNCE_SECONDS
-            except OSError:
-                delay = DEBOUNCE_SECONDS
+            delay = DEBOUNCE_SECONDS
             timer = threading.Timer(delay, self._fire, args=[path])
             timer.daemon = True
             timer.start()
