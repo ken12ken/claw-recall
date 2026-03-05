@@ -24,6 +24,23 @@ except ImportError:
 DB_PATH = Path(__file__).parent / "convo_memory.db"
 EMBEDDING_MODEL = "text-embedding-3-small"
 
+# Common English stop words to drop from FTS keyword queries
+_STOP_WORDS = frozenset({
+    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+    'should', 'may', 'might', 'shall', 'can', 'need', 'dare', 'ought',
+    'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as',
+    'into', 'about', 'between', 'through', 'during', 'before', 'after',
+    'above', 'below', 'up', 'down', 'out', 'off', 'over', 'under',
+    'and', 'but', 'or', 'nor', 'not', 'so', 'yet', 'both', 'either',
+    'neither', 'each', 'every', 'all', 'any', 'few', 'more', 'most',
+    'other', 'some', 'such', 'no', 'only', 'own', 'same', 'than',
+    'too', 'very', 'just', 'because', 'if', 'when', 'where', 'while',
+    'that', 'this', 'these', 'those', 'i', 'me', 'my', 'we', 'our',
+    'you', 'your', 'he', 'him', 'his', 'she', 'her', 'it', 'its',
+    'they', 'them', 'their', 'what', 'which', 'who', 'whom',
+})
+
 # Cached embedding matrix for vectorized semantic search
 # IMPORTANT: metadata stores only IDs (not content) to avoid multi-GB memory.
 # Content is looked up from DB only for top-K results after scoring.
@@ -115,9 +132,9 @@ def keyword_search(
 ) -> List[SearchResult]:
     """Search using FTS5 full-text search."""
 
-    # Build FTS query — AND all words so results must contain every term
-    # Strip quotes to prevent FTS5 syntax errors from user input
+    # Build FTS query — AND all content words (drop stop words for better recall)
     words = [w.replace('"', '') for w in query.split() if w.replace('"', '')]
+    words = [w for w in words if w.lower() not in _STOP_WORDS]
     if not words:
         return []
     fts_query = " AND ".join(f'"{word}"' for word in words)
@@ -438,6 +455,7 @@ def keyword_search_thoughts(
     """Search thoughts using FTS5 full-text search."""
     import json as _json
     words = [w.replace('"', '') for w in query.split() if w.replace('"', '')]
+    words = [w for w in words if w.lower() not in _STOP_WORDS]
     if not words:
         return []
     fts_query = " AND ".join(f'"{word}"' for word in words)

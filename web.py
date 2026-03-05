@@ -337,6 +337,7 @@ def search_endpoint():
     query = request.args.get('q', '')
     semantic = request.args.get('semantic', 'false').lower() == 'true'
     agent = request.args.get('agent', '') or None
+    source = request.args.get('source', '') or None
     files_only = request.args.get('files_only', 'false').lower() == 'true'
     convos_only = request.args.get('convos_only', 'false').lower() == 'true'
 
@@ -353,7 +354,8 @@ def search_endpoint():
             files_only=files_only,
             convos_only=convos_only,
             days=days if days > 0 else None,
-            limit=20
+            limit=20,
+            source=source,
         )
     except Exception as e:
         return jsonify({"error": f"Search failed: {e}", "conversations": [], "files": [], "summary": ""}), 500

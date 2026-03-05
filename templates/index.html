@@ -373,8 +373,14 @@
             <label>Agent: <select id="agent">
                 <option value="">All agents</option>
             </select></label>
-            <label><input type="checkbox" id="filesOnly"> Files only</label>
-            <label><input type="checkbox" id="convosOnly"> Conversations only</label>
+            <label>Source: <select id="sourceFilter">
+                <option value="">All</option>
+                <option value="conversations">Conversations</option>
+                <option value="gmail">Gmail</option>
+                <option value="drive">Drive</option>
+                <option value="slack">Slack</option>
+                <option value="files">Files</option>
+            </select></label>
         </div>
 
         <div class="search-indicator" id="searchIndicator">
@@ -579,9 +585,7 @@
         });
         queryInput.addEventListener('keypress', e => { if (e.key === 'Enter') { clearTimeout(debounceTimer); doSearch(); } });
         document.getElementById('agent').addEventListener('change', () => { if (queryInput.value.trim().length >= 2) doSearch(); });
-        ['filesOnly', 'convosOnly'].forEach(id => {
-            document.getElementById(id).addEventListener('change', () => { if (queryInput.value.trim().length >= 2) doSearch(); });
-        });
+        document.getElementById('sourceFilter').addEventListener('change', () => { if (queryInput.value.trim().length >= 2) doSearch(); });
         // Manual semantic toggle — mark as explicitly set
         document.getElementById('semantic').addEventListener('change', function() {
             _semanticManuallySet = true;
@@ -639,13 +643,15 @@
 
                 // Strip quotes for semantic search — they don't help embedding models
                 const searchQuery = isSemantic ? query.replace(/^["']|["']$/g, '') : query;
+                const sourceVal = document.getElementById('sourceFilter').value;
                 const params = new URLSearchParams({
                     q: searchQuery,
                     semantic: String(isSemantic),
                     days: daysVal,
                     agent: agentVal,
-                    files_only: String(document.getElementById('filesOnly').checked),
-                    convos_only: String(document.getElementById('convosOnly').checked)
+                    files_only: String(sourceVal === 'files'),
+                    convos_only: String(sourceVal === 'conversations'),
+                    source: sourceVal,
                 });
                 const resp = await fetch('/search?' + params, { signal: abortController.signal, credentials: 'include' });
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -729,8 +735,13 @@
             if (!data) return;
             let html = '';
 
+            const sourceVal = document.getElementById('sourceFilter').value;
+            const showConvos = !sourceVal || sourceVal === 'conversations';
+            const showFiles = !sourceVal || sourceVal === 'files';
+            const showThoughts = !sourceVal || ['gmail','drive','slack'].includes(sourceVal);
+
             const convos = data.conversations || [];
-            if (convos.length) {
+            if (convos.length && showConvos) {
                 html += '<div class="section-title">Conversations <span class="result-count">' + convos.length + ' result' + (convos.length !== 1 ? 's' : '') + '</span></div>';
                 const showing = Math.min(convoShowCount, convos.length);
                 for (let i = 0; i < showing; i++) {
@@ -742,7 +753,7 @@
             }
 
             const files = data.files || [];
-            if (files.length) {
+            if (files.length && showFiles) {
                 html += '<div class="section-title">Files <span class="result-count">' + files.length + ' result' + (files.length !== 1 ? 's' : '') + '</span></div>';
                 const showing = Math.min(fileShowCount, files.length);
                 for (let i = 0; i < showing; i++) {
@@ -753,8 +764,12 @@
                 }
             }
 
-            const thoughts = (data.thoughts || []).filter(t => !t.error);
-            if (thoughts.length) {
+            let thoughts = (data.thoughts || []).filter(t => !t.error);
+            // Client-side filter by specific source
+            if (sourceVal && ['gmail','drive','slack'].includes(sourceVal)) {
+                thoughts = thoughts.filter(t => t.source === sourceVal);
+            }
+            if (thoughts.length && showThoughts) {
                 html += '<div class="section-title">Data Sources <span class="result-count">' + thoughts.length + ' result' + (thoughts.length !== 1 ? 's' : '') + '</span></div>';
                 for (const t of thoughts) {
                     const srcClass = (t.source || 'cli').toLowerCase();
@@ -766,7 +781,7 @@
                         + agentStr
                         + '<span class="result-date">' + dateStr + '</span>'
                         + '</div>'
-                        + '<div class="result-preview">' + highlightMatches(escapeHtml(t.content || ''), query) + '</div>'
+                        + '<div class="result-preview">' + highlightTerms(escapeHtml(t.content || ''), query) + '</div>'
                         + '</div>';
                 }
             }

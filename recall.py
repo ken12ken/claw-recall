@@ -140,7 +140,8 @@ def unified_search(
     limit: int = 10,
     days: float = None,
     date_from = None,
-    date_to = None
+    date_to = None,
+    source: str = None,
 ) -> dict:
     """
     Search both conversations and files in parallel.
@@ -161,10 +162,13 @@ def unified_search(
 
     def search_captured_thoughts():
         try:
+            # Map source filter to thought source type
+            thought_source = source if source in ('gmail', 'drive', 'slack') else None
             use_semantic = semantic if semantic is not None else should_use_semantic(query)
             thought_results = search_thoughts(
                 query=query,
                 agent=agent,
+                source=thought_source,
                 semantic=use_semantic,
                 days=int(days) if days else None,
                 limit=limit,
@@ -174,6 +178,7 @@ def unified_search(
                 thought_results = search_thoughts(
                     query=query,
                     agent=agent,
+                    source=thought_source,
                     semantic=False,
                     days=int(days) if days else None,
                     limit=limit,
@@ -186,7 +191,7 @@ def unified_search(
                     "agent": r.agent,
                     "metadata": r.metadata,
                     "created_at": r.created_at.isoformat() if r.created_at else None,
-                    "score": round(r.score, 3),
+                    "score": round(r.score, 3) if r.score is not None else 0,
                 }
                 for r in thought_results
             ]
@@ -263,7 +268,8 @@ def unified_search(
 
         if not files_only:
             futures['convos'] = executor.submit(search_convos)
-            futures['thoughts'] = executor.submit(search_captured_thoughts)
+            if not convos_only:
+                futures['thoughts'] = executor.submit(search_captured_thoughts)
         if not convos_only:
             futures['files'] = executor.submit(search_docs)
 
