@@ -6,7 +6,9 @@ Rewritten 2026-02-21 with auto-search, context expansion, updated agents.
 
 from flask import Flask, render_template, request, jsonify
 import sqlite3
+import os
 import sys
+import logging
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -65,6 +67,10 @@ def generate_deep_link(content: str) -> str | None:
 
 
 app = Flask(__name__, template_folder=str(Path(__file__).resolve().parent / 'templates'))
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB for large session files
+
+REMOTE_INDEX_TEMP_DIR = '/tmp/claw-recall-remote'
+log = logging.getLogger('claw-recall-web')
 
 
 @app.route('/')
@@ -173,6 +179,78 @@ def capture_status_endpoint():
         return jsonify(capture_status())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _extract_path_suffix(source_path: str) -> str:
+    """Extract the significant path suffix for agent detection.
+
+    Preserves the path structure that extract_session_metadata() uses
+    to identify the agent (CC, Claude, Kit, etc.).
+
+    Examples:
+        /home/rodbland/.claude/projects/-test/abc.jsonl -> .claude/projects/-test/abc.jsonl
+        /home/rodbland/.openclaw/agents/main/sessions/x.jsonl -> .openclaw/agents/main/sessions/x.jsonl
+    """
+    for marker in ['.claude/projects', '.openclaw/agents', '.openclaw/agents-archive']:
+        idx = source_path.find(marker)
+        if idx >= 0:
+            return source_path[idx:]
+    return os.path.basename(source_path)
+
+
+@app.route('/index-session', methods=['POST'])
+def index_session_endpoint():
+    """Accept a session file from a remote watcher and index it.
+
+    Expects multipart/form-data with:
+      - file: the .jsonl session file
+      - source_path: original path on the source machine (for de-duplication)
+    """
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    uploaded = request.files['file']
+    source_path = request.form.get('source_path', '')
+    filename = uploaded.filename or 'unknown.jsonl'
+
+    if not filename.endswith('.jsonl'):
+        return jsonify({"error": "Only .jsonl files accepted"}), 400
+    if not source_path:
+        return jsonify({"error": "source_path is required"}), 400
+
+    # Reconstruct path structure for agent detection
+    path_suffix = _extract_path_suffix(source_path)
+    temp_dir = os.path.join(REMOTE_INDEX_TEMP_DIR, os.path.dirname(path_suffix))
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_filepath = Path(os.path.join(temp_dir, filename))
+
+    try:
+        uploaded.save(str(temp_filepath))
+
+        from index import index_session_file
+        conn = _get_db()
+        conn.execute("PRAGMA busy_timeout=30000")
+        try:
+            result = index_session_file(
+                temp_filepath, conn,
+                generate_embeds=False,
+                source_file_override=source_path,
+            )
+            log.info(f"index-session: {filename} -> {result.get('status')} "
+                     f"({result.get('messages', 0)} msgs, agent={result.get('agent', '?')})")
+            return jsonify(result), 200
+        finally:
+            conn.close()
+    except Exception as e:
+        log.error(f"index-session error for {filename}: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if temp_filepath.exists():
+            temp_filepath.unlink()
+        try:
+            os.removedirs(temp_dir)
+        except OSError:
+            pass
 
 
 @app.route('/thoughts')

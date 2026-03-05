@@ -5,6 +5,9 @@ Claw Recall — Real-Time File Watcher
 Watches OpenClaw session directories for new/modified .jsonl files
 and indexes them automatically using watchdog + inotify.
 
+Indexing is serialized through a single worker thread with a persistent
+DB connection and busy timeout, eliminating "database is locked" errors.
+
 Usage:
     python3 watcher.py                     # Run in foreground
     systemctl start claw-recall-watcher    # Run as service
@@ -15,11 +18,11 @@ import time
 import sqlite3
 import threading
 import logging
+import queue
 from pathlib import Path
-from datetime import datetime
 
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent
+from watchdog.events import FileSystemEventHandler
 
 sys.path.insert(0, str(Path(__file__).parent))
 from index import index_session_file, DB_PATH
@@ -28,11 +31,14 @@ from index import index_session_file, DB_PATH
 WATCH_DIRS = [
     Path.home() / ".openclaw" / "agents",
     Path.home() / ".openclaw" / "agents-archive",
+    Path.home() / ".claude" / "projects",
 ]
 
-# Debounce settings
-DEBOUNCE_SECONDS = 5  # Wait 5s after last change before indexing
-EMBEDDING_ON_WATCH = False  # Don't generate embeddings on watch (too slow/expensive)
+DEBOUNCE_SECONDS = 5
+EMBEDDING_ON_WATCH = False
+MAX_RETRIES = 3
+RETRY_DELAY = 10  # seconds between retries
+BUSY_TIMEOUT_MS = 30000  # 30s SQLite busy timeout
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,17 +48,71 @@ logging.basicConfig(
 log = logging.getLogger("watcher")
 
 
+class IndexWorker(threading.Thread):
+    """Single worker thread that processes index jobs serially with a persistent DB connection."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self._queue = queue.Queue()
+        self._conn = None
+        self.stats = {"indexed": 0, "skipped": 0, "errors": 0, "retries": 0}
+
+    def _get_conn(self):
+        if self._conn is None:
+            self._conn = sqlite3.connect(str(DB_PATH), timeout=BUSY_TIMEOUT_MS / 1000)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        return self._conn
+
+    def submit(self, path: str):
+        self._queue.put(path)
+
+    def run(self):
+        while True:
+            path = self._queue.get()
+            self._process(path, attempt=1)
+
+    def _process(self, path: str, attempt: int):
+        filepath = Path(path)
+        if not filepath.exists():
+            return
+
+        try:
+            conn = self._get_conn()
+            result = index_session_file(filepath, conn, generate_embeds=EMBEDDING_ON_WATCH)
+
+            if result['status'] == 'indexed':
+                self.stats["indexed"] += 1
+                log.info(f"Indexed: {filepath.name} ({result['messages']} msgs)")
+            else:
+                self.stats["skipped"] += 1
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) and attempt < MAX_RETRIES:
+                self.stats["retries"] += 1
+                log.warning(f"DB locked indexing {filepath.name}, retry {attempt}/{MAX_RETRIES} in {RETRY_DELAY}s")
+                self._conn = None  # drop stale connection
+                time.sleep(RETRY_DELAY)
+                self._process(path, attempt + 1)
+            else:
+                self.stats["errors"] += 1
+                log.error(f"Error indexing {filepath.name} (attempt {attempt}): {e}")
+                self._conn = None
+        except Exception as e:
+            self.stats["errors"] += 1
+            log.error(f"Error indexing {filepath.name}: {e}")
+            self._conn = None
+
+
 class SessionFileHandler(FileSystemEventHandler):
     """Handles .jsonl file changes with debounced indexing."""
 
-    def __init__(self):
+    def __init__(self, worker: IndexWorker):
         super().__init__()
         self._pending = {}  # path -> timer
         self._lock = threading.Lock()
-        self._stats = {"indexed": 0, "skipped": 0, "errors": 0}
+        self._worker = worker
 
     def _should_handle(self, path: str) -> bool:
-        """Only handle .jsonl files, skip subagents."""
         return (path.endswith('.jsonl')
                 and '/subagents/' not in path
                 and '.deleted.' not in path)
@@ -66,46 +126,25 @@ class SessionFileHandler(FileSystemEventHandler):
             self._schedule_index(event.src_path)
 
     def _schedule_index(self, path: str):
-        """Schedule indexing with debounce — waits for file to stop being written."""
         with self._lock:
             if path in self._pending:
                 self._pending[path].cancel()
-            timer = threading.Timer(DEBOUNCE_SECONDS, self._do_index, args=[path])
+            timer = threading.Timer(DEBOUNCE_SECONDS, self._submit, args=[path])
             timer.daemon = True
             timer.start()
             self._pending[path] = timer
 
-    def _do_index(self, path: str):
-        """Actually index the file."""
+    def _submit(self, path: str):
         with self._lock:
             self._pending.pop(path, None)
-
-        filepath = Path(path)
-        if not filepath.exists():
-            return
-
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
-            conn.execute("PRAGMA journal_mode=WAL")
-            result = index_session_file(filepath, conn, generate_embeds=EMBEDDING_ON_WATCH)
-            conn.close()
-
-            if result['status'] == 'indexed':
-                self._stats["indexed"] += 1
-                log.info(f"Indexed: {filepath.name} ({result['messages']} msgs)")
-            else:
-                self._stats["skipped"] += 1
-        except Exception as e:
-            self._stats["errors"] += 1
-            log.error(f"Error indexing {filepath.name}: {e}")
-
-    @property
-    def stats(self):
-        return dict(self._stats)
+        self._worker.submit(path)
 
 
 def main():
-    handler = SessionFileHandler()
+    worker = IndexWorker()
+    worker.start()
+
+    handler = SessionFileHandler(worker)
     observer = Observer()
 
     watched = 0
@@ -126,10 +165,12 @@ def main():
 
     try:
         while True:
-            time.sleep(60)
+            time.sleep(300)
+            s = worker.stats
+            log.info(f"Stats: indexed={s['indexed']} skipped={s['skipped']} retries={s['retries']} errors={s['errors']}")
     except KeyboardInterrupt:
         observer.stop()
-        log.info(f"Watcher stopped. Stats: {handler.stats}")
+        log.info(f"Watcher stopped. Stats: {worker.stats}")
 
     observer.join()
 

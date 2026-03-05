@@ -344,17 +344,25 @@ def generate_embeddings(texts: list[str], client: Optional['OpenAI'] = None) -> 
 
 
 def index_session_file(
-    filepath: Path, 
+    filepath: Path,
     conn: sqlite3.Connection,
     generate_embeds: bool = False,
-    openai_client: Optional['OpenAI'] = None
+    openai_client: Optional['OpenAI'] = None,
+    source_file_override: str = None,
 ) -> dict:
-    """Index a single session file into the database."""
-    
+    """Index a single session file into the database.
+
+    Args:
+        source_file_override: If provided, use this path for de-duplication
+            in index_log and sessions instead of the local filepath.
+            Used by the /index-session endpoint for remote files.
+    """
+    canonical_source = source_file_override or str(filepath)
+
     # Check if already indexed — re-index if file has changed (active sessions grow)
     cursor = conn.execute(
         "SELECT id, file_size FROM index_log WHERE source_file = ?",
-        (str(filepath),)
+        (canonical_source,)
     )
     existing = cursor.fetchone()
     if existing:
@@ -393,9 +401,9 @@ def index_session_file(
         first_ts,
         last_ts,
         len(messages),
-        str(filepath)
+        canonical_source
     ))
-    
+
     # Insert messages
     message_ids = []
     for msg in messages:
@@ -438,7 +446,7 @@ def index_session_file(
     conn.execute("""
         INSERT INTO index_log (source_file, file_size, file_mtime, message_count)
         VALUES (?, ?, ?, ?)
-    """, (str(filepath), stat.st_size, datetime.fromtimestamp(stat.st_mtime), len(messages)))
+    """, (canonical_source, stat.st_size, datetime.fromtimestamp(stat.st_mtime), len(messages)))
     
     conn.commit()
     

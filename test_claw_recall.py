@@ -939,5 +939,253 @@ class TestIntegration:
             assert stats['by_source'][source] == 1
 
 
+# ─── Remote Session Indexing Tests ────────────────────────────────────────────
+
+class TestPathSuffix:
+    """Test _extract_path_suffix helper for agent detection."""
+
+    def test_cc_projects_path(self):
+        from web import _extract_path_suffix
+        result = _extract_path_suffix(
+            "/home/rodbland/.claude/projects/-mnt-c-code-hostinger/9c41e634.jsonl"
+        )
+        assert result == ".claude/projects/-mnt-c-code-hostinger/9c41e634.jsonl"
+
+    def test_openclaw_agents_path(self):
+        from web import _extract_path_suffix
+        result = _extract_path_suffix(
+            "/home/rodbland/.openclaw/agents/main/sessions/agent-main-xxx.jsonl"
+        )
+        assert result == ".openclaw/agents/main/sessions/agent-main-xxx.jsonl"
+
+    def test_openclaw_archive_path(self):
+        from web import _extract_path_suffix
+        result = _extract_path_suffix(
+            "/home/rodbland/.openclaw/agents-archive/main-abc-123.jsonl"
+        )
+        assert result == ".openclaw/agents-archive/main-abc-123.jsonl"
+
+    def test_fallback_basename(self):
+        from web import _extract_path_suffix
+        result = _extract_path_suffix("/some/random/path/file.jsonl")
+        assert result == "file.jsonl"
+
+
+class TestSourceFileOverride:
+    """Test index_session_file with source_file_override parameter."""
+
+    def _make_cc_session(self, tmp_path):
+        """Create a minimal CC session file."""
+        session_dir = tmp_path / ".claude" / "projects" / "-test"
+        session_dir.mkdir(parents=True)
+        session_file = session_dir / "abc12345-6789-abcd-ef01-234567890abc.jsonl"
+        session_file.write_text(
+            '{"type":"user","message":{"role":"user","content":"hello from CC"}}\n'
+            '{"type":"assistant","message":{"role":"assistant","content":"hi there"}}\n'
+        )
+        return session_file
+
+    def test_override_stores_custom_source_file(self, test_db, tmp_path):
+        conn, _ = test_db
+        session_file = self._make_cc_session(tmp_path)
+        override_path = "/home/rodbland/.claude/projects/-test/abc12345-6789-abcd-ef01-234567890abc.jsonl"
+
+        from index import index_session_file
+        result = index_session_file(session_file, conn, source_file_override=override_path)
+
+        assert result['status'] == 'indexed'
+        assert result['messages'] == 2
+
+        # index_log should use override path
+        row = conn.execute(
+            "SELECT source_file FROM index_log WHERE source_file = ?",
+            (override_path,)
+        ).fetchone()
+        assert row is not None
+
+        # sessions table should also use override path
+        row = conn.execute(
+            "SELECT source_file FROM sessions WHERE id = ?",
+            (session_file.stem,)
+        ).fetchone()
+        assert row[0] == override_path
+
+    def test_no_override_uses_filepath(self, test_db, tmp_path):
+        conn, _ = test_db
+        session_file = self._make_cc_session(tmp_path)
+
+        from index import index_session_file
+        result = index_session_file(session_file, conn)
+        assert result['status'] == 'indexed'
+
+        row = conn.execute("SELECT source_file FROM index_log").fetchone()
+        assert row[0] == str(session_file)
+
+    def test_override_dedup_by_custom_path(self, test_db, tmp_path):
+        """Same override path should trigger skip on second call with same size."""
+        conn, _ = test_db
+        session_file = self._make_cc_session(tmp_path)
+        override_path = "/home/rodbland/.claude/projects/-test/abc12345-6789-abcd-ef01-234567890abc.jsonl"
+
+        from index import index_session_file
+        r1 = index_session_file(session_file, conn, source_file_override=override_path)
+        assert r1['status'] == 'indexed'
+
+        r2 = index_session_file(session_file, conn, source_file_override=override_path)
+        assert r2['status'] == 'skipped'
+        assert r2['reason'] == 'already indexed'
+
+
+class TestIndexSessionEndpoint:
+    """Test the POST /index-session HTTP endpoint."""
+
+    @pytest.fixture
+    def client(self, test_db, monkeypatch):
+        conn, db_path = test_db
+        import web
+        import search
+        import index as idx_mod
+        monkeypatch.setattr(search, 'DB_PATH', db_path)
+        monkeypatch.setattr(idx_mod, 'DB_PATH', db_path)
+        monkeypatch.setattr(web, 'DB_PATH', db_path)  # web imports DB_PATH at module level
+        web.app.config['TESTING'] = True
+        return web.app.test_client()
+
+    def test_no_file_returns_400(self, client):
+        response = client.post('/index-session', data={})
+        assert response.status_code == 400
+        assert "No file" in response.get_json()["error"]
+
+    def test_non_jsonl_returns_400(self, client):
+        import io
+        response = client.post('/index-session', data={
+            'file': (io.BytesIO(b'not jsonl'), 'test.txt'),
+            'source_path': '/tmp/test.txt',
+        }, content_type='multipart/form-data')
+        assert response.status_code == 400
+        assert "jsonl" in response.get_json()["error"].lower()
+
+    def test_no_source_path_returns_400(self, client):
+        import io
+        response = client.post('/index-session', data={
+            'file': (io.BytesIO(b'{}'), 'test.jsonl'),
+        }, content_type='multipart/form-data')
+        assert response.status_code == 400
+        assert "source_path" in response.get_json()["error"]
+
+    def test_index_cc_session(self, client):
+        import io
+        content = (
+            '{"type":"user","message":{"role":"user","content":"test question"}}\n'
+            '{"type":"assistant","message":{"role":"assistant","content":"test answer"}}\n'
+        )
+        response = client.post('/index-session', data={
+            'file': (io.BytesIO(content.encode()), 'abc12345-uuid-test.jsonl'),
+            'source_path': '/home/rodbland/.claude/projects/-test/abc12345-uuid-test.jsonl',
+        }, content_type='multipart/form-data')
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['status'] == 'indexed'
+        assert data['agent'] == 'CC'
+        assert data['messages'] == 2
+
+    def test_index_openclaw_session(self, client):
+        import io
+        content = (
+            '{"type":"message","message":{"role":"user","content":"OpenClaw test"}}\n'
+            '{"type":"message","message":{"role":"assistant","content":"response"}}\n'
+        )
+        response = client.post('/index-session', data={
+            'file': (io.BytesIO(content.encode()), 'agent-main-telegram-xyz.jsonl'),
+            'source_path': '/home/rodbland/.openclaw/agents/main/sessions/agent-main-telegram-xyz.jsonl',
+        }, content_type='multipart/form-data')
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['status'] == 'indexed'
+        assert data['messages'] == 2
+
+    def test_dedup_same_file(self, client):
+        import io
+        content = (
+            '{"type":"user","message":{"role":"user","content":"dedup test"}}\n'
+            '{"type":"assistant","message":{"role":"assistant","content":"response"}}\n'
+        )
+        source = '/home/rodbland/.claude/projects/-test/dedup123.jsonl'
+
+        r1 = client.post('/index-session', data={
+            'file': (io.BytesIO(content.encode()), 'dedup123.jsonl'),
+            'source_path': source,
+        }, content_type='multipart/form-data')
+        assert r1.get_json()['status'] == 'indexed'
+
+        r2 = client.post('/index-session', data={
+            'file': (io.BytesIO(content.encode()), 'dedup123.jsonl'),
+            'source_path': source,
+        }, content_type='multipart/form-data')
+        assert r2.get_json()['status'] == 'skipped'
+
+    def test_temp_file_cleaned_up(self, client):
+        import io
+        content = (
+            '{"type":"user","message":{"role":"user","content":"cleanup test"}}\n'
+            '{"type":"assistant","message":{"role":"assistant","content":"response"}}\n'
+        )
+        client.post('/index-session', data={
+            'file': (io.BytesIO(content.encode()), 'cleanup123.jsonl'),
+            'source_path': '/home/rodbland/.claude/projects/-test/cleanup123.jsonl',
+        }, content_type='multipart/form-data')
+
+        # Temp file should not exist after request
+        temp_path = Path('/tmp/claw-recall-remote/.claude/projects/-test/cleanup123.jsonl')
+        assert not temp_path.exists()
+
+
+class TestWatcherHelpers:
+    """Test cc-session-watcher helper functions."""
+
+    @pytest.fixture(autouse=True)
+    def _load_watcher(self):
+        """Import the hyphenated module name via importlib."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "cc_session_watcher",
+            str(Path(__file__).parent / "cc-session-watcher.py"),
+        )
+        self.watcher = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.watcher)
+
+    def test_needs_indexing_new_file(self, tmp_path):
+        state = {"indexed": {}}
+        f = tmp_path / "new.jsonl"
+        f.write_text('{"test": true}')
+        assert self.watcher.needs_indexing(f, state) is True
+
+    def test_needs_indexing_unchanged(self, tmp_path):
+        f = tmp_path / "same.jsonl"
+        f.write_text('{"test": true}')
+        stat = f.stat()
+        state = {"indexed": {str(f): {"size": stat.st_size, "mtime": stat.st_mtime}}}
+        assert self.watcher.needs_indexing(f, state) is False
+
+    def test_needs_indexing_changed_size(self, tmp_path):
+        f = tmp_path / "changed.jsonl"
+        f.write_text('{"test": true, "more": "data"}')
+        state = {"indexed": {str(f): {"size": 1, "mtime": 0}}}
+        assert self.watcher.needs_indexing(f, state) is True
+
+    def test_needs_indexing_missing_file(self, tmp_path):
+        f = tmp_path / "missing.jsonl"
+        state = {"indexed": {}}
+        assert self.watcher.needs_indexing(f, state) is False
+
+    def test_should_handle(self):
+        assert self.watcher._should_handle("/path/to/session.jsonl") is True
+        assert self.watcher._should_handle("/path/to/session.json") is False
+        assert self.watcher._should_handle("/path/subagents/agent.jsonl") is False
+        assert self.watcher._should_handle("/path/.deleted.session.jsonl") is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
