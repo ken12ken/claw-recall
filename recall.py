@@ -127,11 +127,7 @@ def should_use_semantic(query: str) -> bool:
         if re.search(pattern, query_lower):
             return True
     
-    # Longer queries (4+ words) → likely conceptual, use semantic
-    if len(words) >= 4:
-        return True
-    
-    # Default: keyword for 3 words, semantic detection didn't trigger
+    # Default: keyword (don't auto-semantic just because query is long)
     return False
 
 
