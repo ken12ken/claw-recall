@@ -26,4 +26,4 @@ jobs:
           pip install numpy flask pytest mcp
 
       - name: Run tests
-        run: pytest test_claw_recall.py -v --tb=short
+        run: pytest tests/test_claw_recall.py -v --tb=short
