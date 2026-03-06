@@ -290,6 +290,93 @@ Run it via cron:
 
 Configure the URLs, alert method, and paths in the script's configuration section.
 
+## Production Deployment
+
+Run Claw Recall as systemd services for reliable, always-on operation.
+
+### Service Files
+
+**1. Real-time indexing (watcher):**
+```ini
+# /etc/systemd/system/claw-recall-watcher.service
+[Unit]
+Description=Claw Recall File Watcher (Real-Time Indexing)
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/path/to/claw-recall
+ExecStart=/usr/bin/python3 watcher.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/claw-recall.env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**2. Web API + UI:**
+```ini
+# /etc/systemd/system/claw-recall-web.service
+[Unit]
+Description=Claw Recall Web Interface
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/path/to/claw-recall
+ExecStart=/usr/bin/python3 web.py --host 127.0.0.1 --port 8765
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/claw-recall.env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**3. MCP SSE server (for remote agents):**
+```ini
+# /etc/systemd/system/claw-recall-sse.service
+[Unit]
+Description=Claw Recall MCP SSE Server
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/path/to/claw-recall
+ExecStart=/usr/bin/python3 mcp_server_sse.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+Environment=MCP_SSE_HOST=0.0.0.0
+Environment=MCP_SSE_PORT=8766
+EnvironmentFile=/etc/claw-recall.env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Environment File
+
+Keep secrets out of service files with `/etc/claw-recall.env`:
+```bash
+OPENAI_API_KEY=sk-...
+CLAW_RECALL_REMOTE_HOME=/home/remote-user/
+```
+
+### Enable and Start
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now claw-recall-watcher claw-recall-web claw-recall-sse
+sudo systemctl status claw-recall-watcher claw-recall-web claw-recall-sse
+```
+
 ## Search Modes
 
 Claw Recall auto-detects the best search mode:
@@ -315,7 +402,43 @@ Force a mode with `--keyword` or `--semantic` flags.
 | `CLAW_RECALL_REMOTE_HOME` | No | Home directory of remote machine (for agent detection in pushed files) |
 | `MCP_SSE_HOST` | No | SSE server bind host (default: `0.0.0.0`) |
 | `MCP_SSE_PORT` | No | SSE server bind port (default: `8766`) |
+| `OPENAI_BASE_URL` | No | Override API endpoint for local models (e.g. `http://localhost:11434/v1`) |
 | `MCP_SSE_ALLOWED_HOSTS` | No | Extra allowed hosts for SSE (comma-separated) |
+
+### Using a Local Embedding Model
+
+Claw Recall uses the OpenAI SDK for embeddings, but any OpenAI-compatible endpoint works — including local models via [Ollama](https://ollama.com), vLLM, or text-embeddings-inference.
+
+**Step 1: Update the model name** in two files:
+- `index.py` line 30: `EMBEDDING_MODEL = "nomic-embed-text"` (or your model)
+- `search.py` line 25: `EMBEDDING_MODEL = "nomic-embed-text"` (must match)
+
+**Step 2: Update the embedding dimension** in `search.py` line 275:
+```python
+EMB_DIM = 768  # Must match your model's output dimension
+```
+
+**Step 3: Point at your local endpoint:**
+```bash
+export OPENAI_BASE_URL="http://localhost:11434/v1"  # Ollama
+export OPENAI_API_KEY="not-needed"                    # Required by SDK but unused
+```
+
+**Common models and dimensions:**
+
+| Model | Dimensions | Provider |
+|-------|-----------|----------|
+| text-embedding-3-small | 1536 | OpenAI (default) |
+| nomic-embed-text | 768 | Ollama |
+| mxbai-embed-large | 1024 | Ollama |
+| all-MiniLM-L6-v2 | 384 | HuggingFace / TEI |
+| BGE-large-en-v1.5 | 1024 | HuggingFace / TEI |
+
+**If switching models after initial indexing**, you must regenerate all embeddings:
+```bash
+sqlite3 convo_memory.db "DELETE FROM embeddings;"
+python3 index.py --source ~/.openclaw/agents-archive/ --incremental --embeddings
+```
 
 ## Database
 
