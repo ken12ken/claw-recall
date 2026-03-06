@@ -227,10 +227,10 @@ The built-in web UI at `http://localhost:8765` provides:
 
 ### Automatic: Conversation Indexing
 
-Claw Recall indexes `.jsonl` session files from two sources:
+Claw Recall indexes `.jsonl` session files from two sources, auto-detecting the format:
 
-- **OpenClaw sessions** — `~/.openclaw/agents/` (active) and `~/.openclaw/agents-archive/` (completed)
-- **Claude Code sessions** — `~/.claude/projects/` (automatic format detection)
+- **OpenClaw sessions** — `~/.openclaw/agents/` (active) and `~/.openclaw/agents-archive/` (completed). Agent name extracted from directory/filename path.
+- **Claude Code sessions** — `~/.claude/projects/` (detected by path and JSON structure). These use a different message format that the indexer handles automatically.
 
 **Real-time indexing** (recommended): Run `watcher.py` as a service. It uses inotify to detect changes instantly:
 ```bash
@@ -426,6 +426,57 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now claw-recall-watcher claw-recall-web claw-recall-sse
 sudo systemctl status claw-recall-watcher claw-recall-web claw-recall-sse
 ```
+
+## Agent Names & Detection
+
+### How Agents Are Identified
+
+During indexing, Claw Recall detects which agent produced each session file based on path patterns:
+
+| Path Pattern | Detection | Example |
+|-------------|-----------|---------|
+| `~/.claude/projects/` | Claude Code sessions | Agent = "CC" |
+| `~/.openclaw/agents/<slot>/sessions/` | OpenClaw active sessions | Slot name from path |
+| `~/.openclaw/agents-archive/<slot>-*.jsonl` | OpenClaw archived sessions | Slot name from filename |
+
+For OpenClaw sessions, the **slot name** (e.g., `main`, `cyrus`) is extracted from the file path, then mapped to a **display name** via `AGENT_NAME_MAP` in `index.py`.
+
+### Customizing Agent Names
+
+**You must customize the agent name map for your installation.** Edit `index.py` line ~52:
+
+```python
+AGENT_NAME_MAP = {
+    'main': 'Butler',        # Your primary agent's display name
+    'assistant': 'Helper',   # Another agent
+    'claude-code': 'CC',     # Claude Code sessions
+    # Add your agents here...
+}
+```
+
+Then update the **search alias map** in `search.py` line ~28 to match, so agents can query with either the slot name or display name:
+
+```python
+_AGENT_ALIASES = {
+    'main': 'Butler',           # slot ID → display name
+    'claude-code': 'CC',
+}
+```
+
+After changing these, re-index your sessions so existing data gets the new names:
+```bash
+sqlite3 convo_memory.db "UPDATE sessions SET agent_id = 'Butler' WHERE agent_id = 'main'"
+```
+
+### Agent Filter in Queries
+
+When searching, the `agent` parameter accepts **both** slot IDs and display names:
+```bash
+./recall.py search "deployment" --agent main        # Resolves to display name
+./recall.py search "deployment" --agent Butler       # Direct match
+```
+
+The CLI shows the resolution: `Agent: main → Butler`
 
 ## Search Modes
 
