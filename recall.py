@@ -510,36 +510,36 @@ Examples:
     if args.date_to and args.date_to.hour == 0 and args.date_to.minute == 0 and args.date_to.second == 0:
         args.date_to = args.date_to.replace(hour=23, minute=59, second=59)
 
-    print(f"🦞 Claw Recall: '{query}'")
-    print(f"   Mode: {mode_str}")
-    if args.agent:
-        from search import _resolve_agent
-        resolved = _resolve_agent(args.agent)
-        if resolved != args.agent:
-            print(f"   Agent: {args.agent} → {resolved}")
-            if args.agent.lower() == 'main':
-                print(f"   Note: 'main' is ambiguous in multi-machine setups — use the display name directly for precision")
+    if not args.json:
+        print(f"🦞 Claw Recall: '{query}'")
+        print(f"   Mode: {mode_str}")
+        if args.agent:
+            from search import _resolve_agent
+            resolved = _resolve_agent(args.agent)
+            if resolved != args.agent:
+                print(f"   Agent: {args.agent} → {resolved}")
+                if args.agent.lower() == 'main':
+                    print(f"   Note: 'main' is ambiguous in multi-machine setups — use the display name directly for precision")
+            else:
+                print(f"   Agent: {args.agent}")
+        if args.since:
+            mins = args.since * 1440
+            if mins < 60:
+                print(f"   Since: last {int(mins)} minutes")
+            elif mins < 1440:
+                print(f"   Since: last {mins/60:.1f} hours")
+            else:
+                print(f"   Since: last {args.since:.1f} days")
+        if args.date_from:
+            print(f"   From: {args.date_from.strftime('%Y-%m-%d %H:%M')}")
+        if args.date_to:
+            print(f"   To: {args.date_to.strftime('%Y-%m-%d %H:%M')}")
+        if args.files_only:
+            print(f"   Scope: files only")
+        elif args.convos_only:
+            print(f"   Scope: conversations only")
         else:
-            print(f"   Agent: {args.agent}")
-    if args.since:
-        # Convert fractional days back to human-readable for display
-        mins = args.since * 1440
-        if mins < 60:
-            print(f"   Since: last {int(mins)} minutes")
-        elif mins < 1440:
-            print(f"   Since: last {mins/60:.1f} hours")
-        else:
-            print(f"   Since: last {args.since:.1f} days")
-    if args.date_from:
-        print(f"   From: {args.date_from.strftime('%Y-%m-%d %H:%M')}")
-    if args.date_to:
-        print(f"   To: {args.date_to.strftime('%Y-%m-%d %H:%M')}")
-    if args.files_only:
-        print(f"   Scope: files only")
-    elif args.convos_only:
-        print(f"   Scope: conversations only")
-    else:
-        print(f"   Scope: conversations + files")
+            print(f"   Scope: conversations + files")
 
     results = unified_search(
         query=query,

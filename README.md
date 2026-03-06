@@ -126,16 +126,45 @@ For agents running on the same machine as the database:
 }
 ```
 
-### Setup: Remote Agent (SSE over HTTP)
+### Setup: Remote Agent (SSE over HTTP) — Claude Code
 
-For agents on a different machine (e.g. desktop connecting to a server):
+For Claude Code on a different machine from the database:
 
-**1. Start the SSE server:**
+**1. Start the SSE server** on the machine running Claw Recall:
 ```bash
 MCP_SSE_HOST=0.0.0.0 python3 mcp_server_sse.py
 ```
 
-**2. Configure the remote agent:**
+**2. Register the MCP server** on the Claude Code machine:
+```bash
+claude mcp add --transport sse -s user claw-recall "http://your-server:8766/sse"
+```
+
+**3. Restart Claude Code** (`/exit` then `claude`) for the new MCP server to load.
+
+**4. Verify** — the `mcp__claw-recall__search_memory` tool should now be available.
+
+**Important notes:**
+- Claude Code stores MCP configs in `~/.claude.json` — do NOT put them in `~/.claude/settings.json` (that file is for permissions only)
+- The `claude mcp add` command writes the correct config with `"type": "sse"` automatically
+- If tools don't appear after restart, check for project-level overrides in `~/.claude.json` under `projects.<your-project-path>.mcpServers` — a broken project-level entry will silently override the working user-level one
+- Scopes: `-s user` (all projects), `-s project` (current project only), `-s local` (current directory only, default)
+
+**Manual config** (if you prefer editing JSON directly) — add to the top-level `mcpServers` in `~/.claude.json`:
+```json
+{
+  "mcpServers": {
+    "claw-recall": {
+      "type": "sse",
+      "url": "http://your-server:8766/sse"
+    }
+  }
+}
+```
+
+### Setup: Remote Agent (SSE over HTTP) — Other MCP Clients
+
+For mcporter, OpenClaw, or other MCP-compatible clients, add to their config file:
 ```json
 {
   "mcpServers": {
@@ -146,7 +175,7 @@ MCP_SSE_HOST=0.0.0.0 python3 mcp_server_sse.py
 }
 ```
 
-This is the most robust approach for remote agents — HTTP is stateless, survives sleep/wake cycles, and has no persistent connections to break.
+SSE is the most robust approach for remote agents — HTTP is stateless, survives sleep/wake cycles, and has no persistent connections to break.
 
 ### Context Recovery After Compaction
 
@@ -167,7 +196,7 @@ Returns the full transcript of the last 30 minutes — no search query needed. T
 ./recall.py search "budget decisions" --agent atlas --since 2h
 
 # Browse recent transcripts (no search query)
-./recall.py recent --agent kit --minutes 30
+./recall.py recent --agent butler --minutes 30
 ./recall.py recent --minutes 120    # All agents, last 2 hours
 
 # Capture a thought
