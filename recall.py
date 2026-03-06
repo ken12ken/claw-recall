@@ -96,11 +96,11 @@ def should_use_semantic(query: str) -> bool:
     
     # Force keyword for IDs, account numbers, technical patterns
     id_patterns = [
-        r'act_\d+',           # Facebook ad account IDs
-        r'\d{10,}',           # Long numbers (IDs)
-        r'UC[a-zA-Z0-9_-]+',  # YouTube channel IDs
-        r'[a-f0-9]{24,}',     # MongoDB-style IDs
-        r'\d+\.\d+\.\d+',     # Version numbers, IPs
+        r'act_\d{1,20}',           # Ad account IDs
+        r'\d{10,30}',              # Long numeric IDs
+        r'UC[a-zA-Z0-9_-]{10,50}', # YouTube channel IDs
+        r'[a-f0-9]{24,64}',        # Hex IDs (MongoDB, SHA, etc.)
+        r'\d+\.\d+\.\d+',          # Version numbers, IPs
     ]
     for pattern in id_patterns:
         if re.search(pattern, query):

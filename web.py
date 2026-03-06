@@ -107,6 +107,30 @@ def status_endpoint():
     return jsonify(info)
 
 
+@app.route('/health')
+def health_endpoint():
+    """Health check endpoint for monitoring and orchestration."""
+    try:
+        conn = _get_db()
+        try:
+            sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+            embeddings = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+            last_indexed = conn.execute(
+                "SELECT MAX(started_at) FROM sessions"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        return jsonify({
+            "status": "ok",
+            "db": {"connected": True, "sessions": sessions, "embeddings": embeddings},
+            "last_indexed": last_indexed,
+            "cache": cache_status(),
+        })
+    except Exception as e:
+        log.error(f"Health check failed: {e}")
+        return jsonify({"status": "error", "db": {"connected": False}}), 503
+
+
 @app.route('/agents')
 def agents_endpoint():
     """Return list of agents with session counts (for dynamic pills/dropdown)."""
@@ -277,7 +301,9 @@ def index_local_endpoint():
     staging = Path(REMOTE_INDEX_TEMP_DIR).resolve()
     if not filepath.exists():
         return jsonify({"error": "File not found"}), 404
-    if not str(filepath).startswith(str(staging) + '/'):
+    try:
+        filepath.relative_to(staging)
+    except ValueError:
         return jsonify({"error": "filepath must be within staging directory"}), 403
 
     try:
@@ -343,7 +369,7 @@ def thoughts_endpoint():
 
 @app.route('/search')
 def search_endpoint():
-    query = request.args.get('q', '')
+    query = request.args.get('q', '')[:2000]
     semantic = request.args.get('semantic', 'false').lower() == 'true'
     agent = _resolve_agent(request.args.get('agent', '') or None)
     source = request.args.get('source', '') or None

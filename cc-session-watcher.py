@@ -14,6 +14,7 @@ Usage:
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -208,6 +209,10 @@ def _rsync_push(filepath: Path, dry_run: bool = False) -> dict:
     else:
         path_suffix = filepath.name
 
+    # Validate path_suffix contains expected markers (defense-in-depth)
+    if not any(m in path_suffix for m in ['.claude/', '.openclaw/']):
+        log.warning(f"Unexpected path_suffix: {path_suffix}")
+        return {"status": "error", "reason": "unexpected_path"}
     remote_path = f"{VPS_REMOTE_STAGING}/{os.path.dirname(path_suffix)}/"
 
     if dry_run:
@@ -217,7 +222,7 @@ def _rsync_push(filepath: Path, dry_run: bool = False) -> dict:
     # Ensure remote directory exists and rsync the file
     try:
         mkdir_result = subprocess.run(
-            ["ssh", SSH_HOST, f"mkdir -p {remote_path}"],
+            ["ssh", SSH_HOST, f"mkdir -p {shlex.quote(remote_path)}"],
             capture_output=True, text=True, timeout=10,
         )
         if mkdir_result.returncode != 0:

@@ -76,6 +76,7 @@ _embedding_cache = {
     "last_access": 0,     # monotonic timestamp of last use
 }
 _embedding_lock = threading.Lock()
+_preload_in_progress = False
 
 
 def _clear_embedding_cache():
@@ -357,6 +358,11 @@ def semantic_search(
 
     if not OPENAI_AVAILABLE or openai_client is None:
         print("⚠️  Semantic search requires OpenAI. Falling back to keyword search.")
+        return keyword_search(conn, query, agent, channel, days, limit, date_from=date_from, date_to=date_to)
+
+    # If embedding cache is still loading from startup, fall back gracefully
+    if _preload_in_progress and _embedding_cache["matrix"] is None:
+        print("⚠️  Embedding cache loading — using keyword search. Retry shortly for semantic.")
         return keyword_search(conn, query, agent, channel, days, limit, date_from=date_from, date_to=date_to)
 
     # Generate query embedding (outside lock — network I/O)
@@ -665,8 +671,13 @@ def preload_embedding_cache():
 
     Call this on service start to eliminate cold-start latency on first
     semantic search. Loads the full matrix (~2.3GB) without any filters.
+    While preloading, semantic searches fall back to keyword search.
     """
+    global _preload_in_progress
+
     def _preload():
+        global _preload_in_progress
+        _preload_in_progress = True
         try:
             conn = sqlite3.connect(str(DB_PATH))
             conn.execute("PRAGMA journal_mode=WAL")
@@ -680,6 +691,8 @@ def preload_embedding_cache():
                 print("[search] Embedding cache preload: no embeddings found")
         except Exception as e:
             print(f"[search] Embedding cache preload failed: {e}")
+        finally:
+            _preload_in_progress = False
 
     t = threading.Thread(target=_preload, daemon=True, name="embedding-preload")
     t.start()

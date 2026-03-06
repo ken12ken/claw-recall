@@ -39,6 +39,8 @@ def parse_session_file(filepath: Path) -> Generator[dict, None, None]:
             line = line.strip()
             if not line:
                 continue
+            if len(line) > 10 * 1024 * 1024:  # Skip lines > 10MB
+                continue
             try:
                 data = json.loads(line)
                 data['_line_num'] = line_num
