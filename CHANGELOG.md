@@ -7,7 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [2.0.0] — 2026-03-06
 
-Major release: MCP integration, external source capture, SSE transport, health monitoring, and production hardening. 40+ commits in 2 days.
+Major release: MCP integration, external source capture, SSE transport, health monitoring, and production hardening.
 
 ### Added
 
