@@ -264,6 +264,50 @@ python3 capture_sources.py all             # All sources
 python3 capture_sources.py gmail --backfill --days 90   # Historical backfill
 ```
 
+### Backfilling Existing Data
+
+If you've been running agents for a while before setting up Claw Recall, use these tools to import historical data:
+
+**1. Index all existing session files:**
+```bash
+# Full index of all archived sessions (with embeddings — slower but enables semantic search)
+python3 index.py --source ~/.openclaw/agents-archive/ --embeddings
+
+# Incremental re-index (skips already-indexed files — safe to run repeatedly)
+python3 index.py --source ~/.openclaw/agents-archive/ --incremental --embeddings
+
+# Index Claude Code sessions
+python3 index.py --source ~/.claude/projects/ --incremental --embeddings
+```
+
+**2. Backfill embeddings for messages indexed without them:**
+```bash
+# Process 500 messages per run (cron-safe, picks up where it left off)
+python3 backfill_embeddings.py
+
+# Larger batch for faster catch-up
+python3 backfill_embeddings.py --limit 2000
+```
+
+If you initially indexed without `--embeddings`, the backfill script will generate them incrementally. Run it via cron for hands-off catch-up:
+```bash
+*/30 * * * * cd /path/to/claw-recall && python3 backfill_embeddings.py --quiet
+```
+
+**3. Backfill external sources:**
+```bash
+python3 capture_sources.py gmail --backfill --days 90    # Last 90 days of email
+python3 capture_sources.py drive --backfill --days 180   # Last 6 months of Drive changes
+python3 capture_sources.py slack --backfill --days 30    # Last month of Slack
+```
+
+**4. If you switched embedding models**, regenerate all embeddings:
+```bash
+sqlite3 convo_memory.db "DELETE FROM embeddings;"
+python3 index.py --source ~/.openclaw/agents-archive/ --incremental --embeddings
+python3 backfill_embeddings.py --limit 5000   # Run repeatedly until caught up
+```
+
 ## Multi-Agent Setup
 
 Point all agents at the same database:
