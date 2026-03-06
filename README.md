@@ -486,6 +486,11 @@ python3 -m pytest test_claw_recall.py -k mcp        # MCP tests
 - OpenAI API key (optional, for semantic search)
 - `pip install -r requirements.txt` (Flask, numpy, openai, watchdog, mcp)
 
+## Community
+
+- **Discord:** [Join the Claw Recall server](https://discord.gg/4wGTVa9Bt6) — setup help, feature requests, show off your config
+- **Issues:** [GitHub Issues](https://github.com/rodbland2021/claw-recall/issues) — bug reports and feature requests
+
 ## License
 
 MIT — Use freely, modify as needed.
