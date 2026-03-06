@@ -55,7 +55,10 @@ def search_memory(
     days: int = 0,
     limit: int = 10,
 ) -> str:
-    """Search all memory: conversations, captured thoughts, and markdown files.
+    """Search ALL memory sources: conversations, captured thoughts (Gmail, Drive, Slack), and markdown files.
+
+    This is the primary search tool — it searches everything automatically.
+    You do NOT need to call search_thoughts separately; thoughts are included here.
 
     Auto-detects whether to use semantic (meaning-based) or keyword search.
     Use force_semantic or force_keyword to override.
@@ -66,7 +69,7 @@ def search_memory(
         force_semantic: Force semantic search (for conceptual questions)
         force_keyword: Force keyword search (for exact terms, IDs)
         files_only: Only search markdown files
-        convos_only: Only search conversations (skip files)
+        convos_only: Only search conversations and thoughts (skip markdown files)
         days: Limit to last N days (0 = all time)
         limit: Max results per category
     """
