@@ -1,6 +1,10 @@
 # Claw Recall
 
-**Searchable conversation memory for AI agents.** · v2.0.0 · [Changelog](CHANGELOG.md)
+[![Discord](https://img.shields.io/discord/1479309142060695664?color=5865F2&logo=discord&logoColor=white&label=Discord)](https://discord.gg/4wGTVa9Bt6)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue)](CHANGELOG.md)
+
+**Searchable conversation memory for AI agents.** · [Changelog](CHANGELOG.md) · [Discord](https://discord.gg/4wGTVa9Bt6)
 
 Claw Recall gives your AI agents the ability to search through ALL past conversations — not just what's in the current context window. When context compaction erases memory, Claw Recall brings it back.
 
