@@ -23,8 +23,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
-# Ensure repo is on path
-sys.path.insert(0, str(Path(__file__).parent))
+# Ensure repo root is on path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -1365,7 +1365,7 @@ class TestWatcherHelpers:
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "cc_session_watcher",
-            str(Path(__file__).parent / "cc-session-watcher.py"),
+            str(Path(__file__).parent.parent / "cc-session-watcher.py"),
         )
         self.watcher = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.watcher)
