@@ -690,6 +690,8 @@ If Claw Recall is useful to you, consider supporting its development:
 - 🔧 **Contribute code or docs** — see [CONTRIBUTING.md](CONTRIBUTING.md)
 - 💬 **Help others** — answer questions in [Discord #support](https://discord.gg/4wGTVa9Bt6)
 
+- ☕ **Buy Me a Coffee** — [buymeacoffee.com/rodbland](https://buymeacoffee.com/rodbland)
+
 **Bitcoin:**
 ```
 bc1q98g7ny06nlyzjfj5drrjgzxd2tk0hj3gvk4z2y
