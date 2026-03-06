@@ -681,6 +681,20 @@ python3 -m pytest test_claw_recall.py -k mcp        # MCP tests
 - **Discord:** [Join the Claw Recall server](https://discord.gg/4wGTVa9Bt6) — setup help, feature requests, show off your config
 - **Issues:** [GitHub Issues](https://github.com/rodbland2021/claw-recall/issues) — bug reports and feature requests
 
+## Support the Project
+
+If Claw Recall is useful to you, consider supporting its development:
+
+- ⭐ **Star this repo** — helps others find it
+- 🐛 **Report bugs and suggest features** — [GitHub Issues](https://github.com/rodbland2021/claw-recall/issues)
+- 🔧 **Contribute code or docs** — see [CONTRIBUTING.md](CONTRIBUTING.md)
+- 💬 **Help others** — answer questions in [Discord #support](https://discord.gg/4wGTVa9Bt6)
+
+**Bitcoin:**
+```
+bc1q5ggxp0wrgcnn07hkjdhwqtxmsfejqh329djhqz
+```
+
 ## License
 
 MIT — Use freely, modify as needed.
