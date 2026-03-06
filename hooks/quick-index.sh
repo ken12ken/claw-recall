@@ -9,7 +9,8 @@ log() { echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*"; }
 
 # Use OPENAI_API_KEY from environment (set via systemd EnvironmentFile, .env, or export)
 if [ -z "$OPENAI_API_KEY" ] && [ -f "$SCRIPT_DIR/.env" ]; then
-    export $(grep -v '^#' "$SCRIPT_DIR/.env" | grep OPENAI_API_KEY | xargs)
+    OPENAI_API_KEY=$(grep -m1 '^OPENAI_API_KEY=' "$SCRIPT_DIR/.env" | cut -d= -f2-)
+    export OPENAI_API_KEY
 fi
 
 log "Starting quick-index..."

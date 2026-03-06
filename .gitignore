@@ -1,15 +1,30 @@
 # Database
 *.db
+*.db-shm
+*.db-wal
 
 # Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+*.egg-info/
+dist/
+build/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Environment & config
 .env
 agents.json
+
+# Logs & temp
+*.log
+tmp/
+temp/
 
 # IDE
 .vscode/

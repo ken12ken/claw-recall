@@ -32,7 +32,8 @@ echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] Compaction detected: $NEW_FILES new 
 
 # Use OPENAI_API_KEY from environment (set via systemd EnvironmentFile, .env, or export)
 if [ -z "$OPENAI_API_KEY" ] && [ -f "$RECALL_DIR/.env" ]; then
-    export $(grep -v '^#' "$RECALL_DIR/.env" | grep OPENAI_API_KEY | xargs)
+    OPENAI_API_KEY=$(grep -m1 '^OPENAI_API_KEY=' "$RECALL_DIR/.env" | cut -d= -f2-)
+    export OPENAI_API_KEY
 fi
 
 if [ -z "$OPENAI_API_KEY" ]; then
