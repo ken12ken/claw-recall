@@ -1279,7 +1279,7 @@ class TestBrowseRecent:
         assert response.status_code == 200
         data = response.get_json()
         assert data['total_sessions'] == 1
-        assert data['agent_filter'] == 'kit'
+        assert data['agent_filter'] == 'Kit'  # 'kit' resolves to display name 'Kit'
         assert data['sessions'][0]['agent'] == 'kit'
 
     def test_recent_excludes_boot_sessions(self, client):

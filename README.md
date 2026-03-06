@@ -443,27 +443,28 @@ For OpenClaw sessions, the **slot name** (e.g., `main`, `cyrus`) is extracted fr
 
 ### Customizing Agent Names
 
-**You must customize the agent name map for your installation.** Edit `index.py` line ~52:
+Copy the example config and edit it for your agents:
 
-```python
-AGENT_NAME_MAP = {
-    'main': 'Butler',        # Your primary agent's display name
-    'assistant': 'Helper',   # Another agent
-    'claude-code': 'CC',     # Claude Code sessions
-    # Add your agents here...
+```bash
+cp agents.json.example agents.json
+```
+
+```json
+{
+    "agent_names": {
+        "main": "Butler",
+        "assistant": "Helper",
+        "claude-code": "CC",
+        "cc-vps": "CC-VPS"
+    }
 }
 ```
 
-Then update the **search alias map** in `search.py` line ~28 to match, so agents can query with either the slot name or display name:
+The left side is the **OpenClaw slot ID** (from directory/filename paths). The right side is the **display name** stored in the database and shown in search results. Both `index.py` and `search.py` read from this single config file.
 
-```python
-_AGENT_ALIASES = {
-    'main': 'Butler',           # slot ID → display name
-    'claude-code': 'CC',
-}
-```
+If no `agents.json` exists, raw slot names are used as-is (no mapping applied).
 
-After changing these, re-index your sessions so existing data gets the new names:
+After changing agent names for existing data, update the database:
 ```bash
 sqlite3 convo_memory.db "UPDATE sessions SET agent_id = 'Butler' WHERE agent_id = 'main'"
 ```

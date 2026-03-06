@@ -7,8 +7,9 @@ __pycache__/
 .venv/
 venv/
 
-# Environment
+# Environment & config
 .env
+agents.json
 
 # IDE
 .vscode/

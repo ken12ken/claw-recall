@@ -1,0 +1,8 @@
+{
+    "agent_names": {
+        "main": "MyAgent",
+        "claude-code": "CC",
+        "cc-vps": "CC-VPS",
+        "assistant": "Helper"
+    }
+}

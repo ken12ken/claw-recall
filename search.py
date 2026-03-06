@@ -25,13 +25,19 @@ DB_PATH = Path(__file__).parent / "convo_memory.db"
 EMBEDDING_MODEL = "text-embedding-3-small"
 
 # Agent name mapping — translates raw OpenClaw slot IDs to display names stored in DB.
-# Agents can query with either form (e.g., "main" or "kit") and get correct results.
-_AGENT_ALIASES = {
-    'main': 'Kit',
-    'claude-code': 'CC',
-    'claude': 'Claude',
-    'cc-vps': 'CC-VPS',
-}
+# Loaded from agents.json (shared with index.py). Agents can query with either form.
+def _load_agent_aliases() -> dict:
+    config_path = Path(__file__).parent / "agents.json"
+    if config_path.exists():
+        try:
+            import json
+            data = json.loads(config_path.read_text())
+            return {k.lower(): v for k, v in data.get("agent_names", {}).items()}
+        except Exception:
+            pass
+    return {}
+
+_AGENT_ALIASES = _load_agent_aliases()
 
 def _resolve_agent(agent: Optional[str]) -> Optional[str]:
     """Resolve an agent name/alias to the display name stored in the DB."""

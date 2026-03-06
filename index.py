@@ -48,26 +48,20 @@ def parse_session_file(filepath: Path) -> Generator[dict, None, None]:
                 continue
 
 
-# Canonical agent name mapping — normalizes internal IDs to display names
-AGENT_NAME_MAP = {
-    'main': 'Kit',
-    'kit': 'Kit',
-    'claude': 'Claude',
-    'claude-code': 'CC',
-    'cc': 'CC',
-    'cc-vps': 'CC-VPS',
-    'gemini': 'gemini',
-    'cyrus': 'cyrus',
-    'damian': 'damian',
-    'hale': 'hale',
-    'arthur': 'arthur',
-    'roman': 'roman',
-    'sterling': 'sterling',
-    'conrad': 'conrad',
-    'elara': 'elara',
-    'grok': 'grok',
-    'chat': 'chat',
-}
+# Canonical agent name mapping — normalizes internal IDs to display names.
+# Loaded from agents.json if it exists, otherwise agents pass through with raw names.
+def _load_agent_names() -> dict:
+    config_path = Path(__file__).parent / "agents.json"
+    if config_path.exists():
+        try:
+            import json
+            data = json.loads(config_path.read_text())
+            return {k.lower(): v for k, v in data.get("agent_names", {}).items()}
+        except Exception:
+            pass
+    return {}
+
+AGENT_NAME_MAP = _load_agent_names()
 
 # Known OpenClaw agent slot names (used to validate filename-parsed agent IDs)
 KNOWN_AGENTS = set(AGENT_NAME_MAP.keys())
