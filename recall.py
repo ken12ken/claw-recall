@@ -374,6 +374,65 @@ def _run_capture(args):
         print(f"   Agent: {result['agent']}")
 
 
+def _run_recent(args):
+    """Handle the 'recent' subcommand — full transcript of last N minutes."""
+    import sqlite3
+    from search import DB_PATH
+
+    minutes = max(1, min(args.minutes, 120))
+    agent = args.agent
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute("PRAGMA journal_mode=WAL")
+
+    sql = """
+        SELECT s.agent_id, s.id, m.role, m.content, m.timestamp, m.message_index, s.message_count
+        FROM messages m
+        JOIN sessions s ON m.session_id = s.id
+        WHERE m.timestamp >= datetime('now', ?)
+          AND s.message_count > 2
+          AND LENGTH(s.agent_id) BETWEEN 2 AND 14
+          AND s.agent_id NOT LIKE 'agent:%'
+          AND s.agent_id NOT GLOB '[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]*'
+          AND s.agent_id NOT IN ('boot', 'acompact', 'compact')
+    """
+    params: list = [f"-{minutes} minutes"]
+    if agent:
+        sql += " AND s.agent_id = ? COLLATE NOCASE"
+        params.append(agent)
+    sql += " ORDER BY m.timestamp ASC, m.message_index ASC LIMIT 500"
+
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+
+    if not rows:
+        print(f"No messages found in the last {minutes} minutes.")
+        return
+
+    sessions: dict = {}
+    for agent_id, session_id, role, content, timestamp, msg_idx, total_count in rows:
+        if session_id not in sessions:
+            sessions[session_id] = {"agent": agent_id, "messages": [], "first_ts": timestamp, "total": total_count or 0}
+        content = content or ""
+        if role == "tool_result" and len(content) > 300:
+            content = content[:300] + "..."
+        elif role == "assistant" and len(content) > 2000:
+            content = content[:2000] + "..."
+        sessions[session_id]["messages"].append((role, content, timestamp))
+
+    total_msgs = sum(len(s["messages"]) for s in sessions.values())
+    print(f"=== Recent Transcript (last {minutes} min, {total_msgs} messages across {len(sessions)} session(s)) ===\n")
+
+    for sid, info in sessions.items():
+        shown = len(info["messages"])
+        total = info["total"]
+        count_note = f" ({shown} of {total} msgs)" if shown < total else f" ({total} msgs)"
+        print(f"--- {info['agent']}{count_note} | {info['first_ts']} | session:{sid[:12]} ---")
+        for role, content, ts in info["messages"]:
+            print(f"[{role}] {content}")
+        print()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog='claw-recall',
@@ -403,6 +462,16 @@ Examples:
         cap_parser.add_argument('--agent', '-a', help='Agent name')
         cap_args = cap_parser.parse_args(sys.argv[2:])
         _run_capture(cap_args)
+        return
+
+    # Check if first arg is "recent" subcommand
+    if len(sys.argv) > 1 and sys.argv[1] == 'recent':
+        rec_parser = argparse.ArgumentParser(prog='claw-recall recent',
+            description='Get full transcript of recent conversations (last N minutes)')
+        rec_parser.add_argument('--agent', '-a', help='Filter by agent name')
+        rec_parser.add_argument('--minutes', '-m', type=int, default=30, help='Minutes back (default 30, max 120)')
+        rec_args = rec_parser.parse_args(sys.argv[2:])
+        _run_recent(rec_args)
         return
 
     parser.add_argument('query', nargs='+', help='Search query')
