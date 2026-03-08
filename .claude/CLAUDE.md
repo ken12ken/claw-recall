@@ -28,7 +28,32 @@ git diff --name-only HEAD~1 | xargs -I{} basename {} | xargs -I{} grep -rn {} RE
 - Tests: `python3 -m pytest tests/test_claw_recall.py -v`
 - This is a **public repo** — never commit internal IPs, hostnames, paths, API keys, or agent names
 - All changes go through PRs — never push directly to master
-- Version in `VERSION` file — update when releasing
+- Version in `VERSION` file — update when releasing (see Release Procedure below)
+
+## Release Procedure
+
+Claw Recall follows [Semantic Versioning](https://semver.org/):
+- **Patch (x.y.Z)** — bug fixes, small improvements. Batch a few PRs together.
+- **Minor (x.Y.0)** — new features (MCP tool, CLI flag, source type, notable behavior change).
+- **Major (X.0.0)** — breaking changes (API changes, config format changes, dropped support).
+
+**When to release:** After merging sufficient changes, ask Rod: *"N PRs merged since vX.Y.Z — ready to cut vX.Y.Z+1?"* Don't release after every single PR — group related changes.
+
+**Steps:**
+1. Create a branch: `git checkout -b release/vX.Y.Z`
+2. Update `VERSION` file with the new version
+3. Add a new section to `CHANGELOG.md` (date, summary, Changed/Added/Fixed subsections)
+4. Update the README badge: `[![Version](https://img.shields.io/badge/version-X.Y.Z-blue)]`
+5. Commit, push, create PR, merge
+6. Tag and release from master:
+   ```bash
+   git checkout master && git pull
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   gh release create vX.Y.Z -R rodbland2021/claw-recall \
+     --title "vX.Y.Z — Summary" --notes-file /tmp/release-notes.md
+   ```
+7. Verify: `gh release list -R rodbland2021/claw-recall -L 1`
 
 ## Package Layout
 
