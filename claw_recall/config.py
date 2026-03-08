@@ -155,6 +155,25 @@ def _build_redaction_patterns() -> list[tuple[re.Pattern, int]]:
 
 REDACTION_PATTERNS = _build_redaction_patterns()
 
+# Named patterns for reporting (used by redact_historical.py to count by type)
+SECRET_PATTERNS: dict[str, str] = {
+    "Google OAuth Secret": r'GOCSPX-[A-Za-z0-9_-]{20,}',
+    "Google OAuth Client ID": r'\d{6,}-[a-z0-9]{20,}\.apps\.googleusercontent\.com',
+    "Tailscale Key": r'tskey-(?:api|auth|client)-[A-Za-z0-9-]{20,}',
+    "AWS Access Key": r'AKIA[0-9A-Z]{16}',
+    "Password": r'(?:password|passwd|pass|pwd)\s*[=:]\s*["\']?\S{6,}',
+    "Bearer/Auth Token": r'(?:Authorization|X-Agent-Token)["\']?\s*[=:]\s*["\']?(?:Bearer\s+)?[A-Za-z0-9_\-./+=]{20,}',
+    "API Key": r'(?:api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?token|auth[_-]?token)\s*[=:]\s*["\']?[A-Za-z0-9_\-./+=]{20,}',
+    "Cookie Secret": r'(?:COOKIE_SECRET|cookie.secret)\s*[=:]\s*["\']?[A-Za-z0-9+/=_-]{20,}',
+    "SSH Private Key": r'-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----',
+    "Slack Token": r'xox[bpras]-[A-Za-z0-9-]{10,}',
+    "GitHub Token": r'gh[ps]_[A-Za-z0-9]{30,}',
+    "OpenAI Key": r'sk-[A-Za-z0-9]{20,}',
+    "Stripe Key": r'[sp]k_(?:test|live)_[A-Za-z0-9]{20,}',
+    "Sendgrid Key": r'SG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}',
+    "Connection String": r'://[^:]+:[^@]{6,}@',
+}
+
 
 def redact_secrets(text: str) -> str:
     """Replace secret values in text with [REDACTED].
