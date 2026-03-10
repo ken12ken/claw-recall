@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ---
 
+## [2.2.1] — 2026-03-10
+
+Fixed community_role.py bot token config, enhanced secret redaction reporting, updated Discord invite link.
+
+---
+
 ## [2.2.0] — 2026-03-08
 
 ### Added
@@ -15,10 +21,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ---
 
+## [2.2.1] — 2026-03-10
+
+Fixed community_role.py bot token config, enhanced secret redaction reporting, updated Discord invite link.
+
+---
+
 ## [2.1.1] — 2026-03-08
 
 ### Fixed
 - Web UI broken after v2.1.0 package refactor — `_REPO_DIR` in `web.py` resolved one level too shallow (`claw_recall/` instead of repo root), causing `TemplateNotFound: index.html` on every request
+
+---
+
+## [2.2.1] — 2026-03-10
+
+Fixed community_role.py bot token config, enhanced secret redaction reporting, updated Discord invite link.
 
 ---
 
@@ -53,6 +71,12 @@ Package refactor: all code consolidated into `claw_recall/` Python package with 
 ### Fixed
 - mcporter MCP stdio config updated to reference new package module path
 - All 123 tests updated for new import paths and passing
+
+---
+
+## [2.2.1] — 2026-03-10
+
+Fixed community_role.py bot token config, enhanced secret redaction reporting, updated Discord invite link.
 
 ---
 
@@ -113,6 +137,12 @@ Major release: MCP integration, external source capture, SSE transport, health m
 
 ---
 
+## [2.2.1] — 2026-03-10
+
+Fixed community_role.py bot token config, enhanced secret redaction reporting, updated Discord invite link.
+
+---
+
 ## [1.3.0] — 2026-03-04
 
 Web UI overhaul and critical memory leak fix.
@@ -134,6 +164,12 @@ Web UI overhaul and critical memory leak fix.
 
 ---
 
+## [2.2.1] — 2026-03-10
+
+Fixed community_role.py bot token config, enhanced secret redaction reporting, updated Discord invite link.
+
+---
+
 ## [1.2.0] — 2026-02-27
 
 Major quality pass. Merged evolved production code back into repo and ran 3 rounds of Principal Architect review.
@@ -148,6 +184,12 @@ Major quality pass. Merged evolved production code back into repo and ran 3 roun
 ### Security
 - Thread safety audit and fixes across all concurrent access points
 - Input validation hardened on all endpoints
+
+---
+
+## [2.2.1] — 2026-03-10
+
+Fixed community_role.py bot token config, enhanced secret redaction reporting, updated Discord invite link.
 
 ---
 
@@ -169,6 +211,12 @@ Semantic search and Claude Code support.
 - Embedding batch size reduced from 100 to 20 (reliability)
 - Agent ID detection for UUID session filenames
 - Handling for agents-archive-vps and CC sub-agent filename patterns
+
+---
+
+## [2.2.1] — 2026-03-10
+
+Fixed community_role.py bot token config, enhanced secret redaction reporting, updated Discord invite link.
 
 ---
 
